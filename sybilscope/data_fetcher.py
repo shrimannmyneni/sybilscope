@@ -213,6 +213,129 @@ def build_funding_clusters(all_wallet_data: list[dict]) -> list[dict]:
     return clusters
 
 
+def analyze_edge_directionality(address: str, all_wallet_data: list[dict]) -> dict:
+    """Analyze whether a node's edges are bidirectional or unidirectional.
+
+    Scans ALL wallet data (not just this address's txs) to find edges,
+    since Etherscan API may truncate individual wallet histories.
+
+    Sybil master wallets send funds one-way to many children.
+    Legit active users have back-and-forth transactions.
+
+    Returns {"total_peers": int, "bidirectional": int, "send_only": int,
+             "receive_only": int, "bidi_ratio": float}.
+    """
+    addr_lower = address.lower()
+    addr_set = set(wd["address"].lower() for wd in all_wallet_data)
+
+    sent_to: set[str] = set()
+    received_from: set[str] = set()
+
+    # Scan ALL wallets' transactions to find edges involving this address
+    for wd in all_wallet_data:
+        for tx in wd.get("transactions", []):
+            f = tx.get("from", "").lower()
+            t = tx.get("to", "").lower()
+            if f == addr_lower and t in addr_set and t != addr_lower:
+                sent_to.add(t)
+            if t == addr_lower and f in addr_set and f != addr_lower:
+                received_from.add(f)
+
+    bidirectional = sent_to & received_from
+    send_only = sent_to - received_from
+    receive_only = received_from - sent_to
+    total = len(sent_to | received_from)
+
+    bidi_ratio = len(bidirectional) / total if total > 0 else 0.0
+
+    return {
+        "total_peers": total,
+        "bidirectional": len(bidirectional),
+        "send_only": len(send_only),
+        "receive_only": len(receive_only),
+        "bidi_ratio": round(bidi_ratio, 3),
+    }
+
+
+def refine_louvain_clusters(
+    clusters: list[dict], all_wallet_data: list[dict], max_cluster_size: int = 15
+) -> list[dict]:
+    """Second pass: refine large Louvain clusters by removing high-degree bidirectional nodes.
+
+    For clusters larger than max_cluster_size:
+    1. Find nodes with high degree (top 10% or degree > 5)
+    2. Check if their edges are mostly bidirectional (bidi_ratio > 0.5)
+    3. If yes → remove them (likely legit active users, not sybil)
+    4. Re-split the remaining nodes into connected components
+
+    Returns refined cluster list.
+    """
+    import networkx as nx
+
+    addr_set = set(wd["address"].lower() for wd in all_wallet_data)
+
+    refined = []
+    for cluster in clusters:
+        if cluster["size"] <= max_cluster_size:
+            refined.append(cluster)
+            continue
+
+        # Build subgraph for this cluster
+        cluster_addrs = set(a.lower() for a in cluster["addresses"])
+        G = nx.Graph()
+        for a in cluster_addrs:
+            G.add_node(a)
+
+        for wd in all_wallet_data:
+            if wd["address"].lower() not in cluster_addrs:
+                continue
+            for tx in wd.get("transactions", []):
+                f = tx.get("from", "").lower()
+                t = tx.get("to", "").lower()
+                if f in cluster_addrs and t in cluster_addrs and f != t:
+                    if not G.has_edge(f, t):
+                        G.add_edge(f, t)
+
+        # Find high-degree nodes
+        degrees = dict(G.degree())
+        if not degrees:
+            refined.append(cluster)
+            continue
+
+        avg_degree = sum(degrees.values()) / len(degrees)
+        threshold = max(5, avg_degree * 2)
+
+        nodes_to_remove = []
+        for addr, deg in degrees.items():
+            if deg > threshold:
+                directionality = analyze_edge_directionality(addr, all_wallet_data)
+                # Remove if: mostly receiving (not a sybil master — masters SEND)
+                # or bidirectional (active legit user, not sybil)
+                is_receiver = directionality["receive_only"] > directionality["send_only"]
+                is_bidi = directionality["bidi_ratio"] > 0.3
+                if is_receiver or is_bidi:
+                    nodes_to_remove.append(addr)
+
+        if not nodes_to_remove:
+            refined.append(cluster)
+            continue
+
+        # Remove hub nodes and find connected components
+        G.remove_nodes_from(nodes_to_remove)
+        components = list(nx.connected_components(G))
+
+        for comp in components:
+            if len(comp) >= 2:
+                refined.append({
+                    "community": cluster.get("community", -1),
+                    "addresses": list(comp),
+                    "size": len(comp),
+                })
+
+    refined.sort(key=lambda c: c["size"], reverse=True)
+    return refined
+
+
 def build_louvain_clusters(all_wallet_data: list[dict]) -> list[dict]:
     """Detect communities via Louvain on the wallet transaction graph.
 
@@ -448,6 +571,160 @@ def build_funding_tree(address: str, max_depth: int = 3) -> dict:
     }
 
 
+def detect_tx_count_fingerprint(cluster_wallet_data: list[dict]) -> dict:
+    """Detect if many wallets in a cluster have identical transaction counts.
+
+    Bots execute a fixed script → identical tx counts across wallets.
+    Normal users have varied tx counts.
+
+    IMPORTANT: Excludes known Etherscan API pagination limits (44, 100, 1000, 10000)
+    which appear as artifacts, not real behavioral signals.
+
+    Returns {"is_fingerprint": bool, "dominant_count": int,
+             "matching_wallets": int, "total_wallets": int}.
+    """
+    # Known API pagination artifacts — NOT real bot fingerprints
+    API_PAGE_LIMITS = {44, 100, 1000, 10000}
+
+    if len(cluster_wallet_data) < 2:
+        return {"is_fingerprint": False, "dominant_count": 0,
+                "matching_wallets": 0, "total_wallets": len(cluster_wallet_data)}
+
+    counts: dict[int, int] = {}
+    for wd in cluster_wallet_data:
+        tc = wd.get("tx_count", 0)
+        counts[tc] = counts.get(tc, 0) + 1
+
+    # Filter out API pagination artifacts
+    real_counts = {tc: n for tc, n in counts.items() if tc not in API_PAGE_LIMITS}
+
+    if not real_counts:
+        return {"is_fingerprint": False, "dominant_count": 0,
+                "matching_wallets": 0, "total_wallets": len(cluster_wallet_data)}
+
+    dominant = max(real_counts, key=real_counts.get)  # type: ignore
+    matching = real_counts[dominant]
+
+    # Fingerprint if >40% of wallets share the exact same tx count AND count >= 3
+    is_fingerprint = matching >= max(3, len(cluster_wallet_data) * 0.4)
+
+    return {
+        "is_fingerprint": is_fingerprint,
+        "dominant_count": dominant,
+        "matching_wallets": matching,
+        "total_wallets": len(cluster_wallet_data),
+    }
+
+
+def estimate_funder_fan_out(funder_address: str) -> int:
+    """Estimate how many unique addresses a funder has sent to.
+
+    If fan-out > 50, this is likely a public contract (DEX, bridge, exchange),
+    not a sybil master wallet. Real sybil masters fund 10-500 wallets,
+    public contracts fund 10,000+.
+    """
+    if not funder_address:
+        return 0
+    cache = _load_cache()
+    count = 0
+    funder_lower = funder_address.lower()
+    for addr, entry in cache.items():
+        txs = entry.get("transactions", {}).get("result", [])
+        if not isinstance(txs, list):
+            continue
+        for tx in txs:
+            if tx.get("from", "").lower() == funder_lower and tx.get("to", "").lower() == addr.lower():
+                count += 1
+                break
+    return count
+
+
+def post_llm_override(verdicts: list[dict], wallet_features: list[dict],
+                       cluster_signals: dict) -> list[dict]:
+    """Post-LLM sanity check: override CLEAN verdicts that are almost certainly sybil.
+
+    Only overrides when shared funder + at least one additional signal.
+    Skips override if funder is a public contract (fan-out > 50).
+
+    Additional signals required:
+    - behavior similarity > 0.3
+    - tx_count < 10
+    - chain pattern detected
+    - amount anomaly detected
+    - tx count fingerprint match (excluding API artifacts)
+    """
+    cluster_size = cluster_signals.get("cluster_size", 0)
+    fingerprint = cluster_signals.get("tx_fingerprint", {})
+    dominant_count = fingerprint.get("dominant_count", -1)
+    has_fingerprint = fingerprint.get("is_fingerprint", False)
+    chain_detected = cluster_signals.get("chain", {}).get("is_chain", False)
+    amount_anomaly = cluster_signals.get("amount_anomaly", {}).get("is_anomaly", False)
+
+    # Check if funder is a public contract (DEX, exchange, bridge)
+    common_funder = cluster_signals.get("common_funder", "")
+    funder_is_public = False
+    if common_funder:
+        fan_out = estimate_funder_fan_out(common_funder)
+        if fan_out > 50:
+            funder_is_public = True
+
+    for i, v in enumerate(verdicts):
+        wf = wallet_features[i] if i < len(wallet_features) else {}
+        overridden = False
+        reasons = list(v.get("evidence", []))
+
+        # Skip override entirely if funder is a public contract
+        if funder_is_public:
+            continue
+
+        has_funder = wf.get("has_common_funder", False)
+        if not has_funder:
+            continue
+
+        # Count additional signals beyond shared funder
+        additional_signals = 0
+        signal_reasons = []
+
+        if wf.get("behavior_similarity_score", 0) > 0.3:
+            additional_signals += 1
+            signal_reasons.append(f"behavior similarity {wf['behavior_similarity_score']:.2f}")
+
+        if wf.get("tx_count", 999) < 10:
+            additional_signals += 1
+            signal_reasons.append(f"very low tx count ({wf.get('tx_count', 0)})")
+
+        if chain_detected:
+            additional_signals += 1
+            signal_reasons.append("chain pattern in cluster")
+
+        if amount_anomaly:
+            additional_signals += 1
+            signal_reasons.append("amount anomaly in cluster")
+
+        if has_fingerprint and wf.get("tx_count") == dominant_count:
+            additional_signals += 1
+            signal_reasons.append(f"tx count ({dominant_count}) matches bot fingerprint")
+
+        # Only override if shared funder + at least 1 additional signal
+        if v["risk"] == "CLEAN" and additional_signals >= 1 and cluster_size >= 3:
+            v["risk"] = "SUSPICIOUS"
+            v["confidence"] = max(v["confidence"], 0.6)
+            reasons.append(f"Override: shared funder + {', '.join(signal_reasons)}")
+            overridden = True
+
+        # Bump fingerprint matches (only if fingerprint is real, not API artifact)
+        if has_fingerprint and wf.get("tx_count") == dominant_count and v["risk"] == "SUSPICIOUS":
+            v["risk"] = "LIKELY_SYBIL"
+            v["confidence"] = max(v["confidence"], 0.75)
+            reasons.append(f"Override: tx count ({dominant_count}) matches bot fingerprint")
+            overridden = True
+
+        if overridden:
+            v["evidence"] = reasons
+
+    return verdicts
+
+
 def detect_amount_anomaly(cluster_wallet_data: list[dict]) -> dict:
     """Detect statistically impossible amount patterns across a cluster.
 
@@ -571,7 +848,11 @@ def llm_classify_cluster_enriched(
 
     common = cluster_signals.get("common_funder", "")
     if common:
-        signals_text += f"  Common funder: {common[:16]}... funds {cluster_size} wallets\n"
+        signals_text += f"  SHARED FUNDER: {common[:16]}... funds {cluster_size} wallets. This alone is a strong sybil indicator.\n"
+
+    fingerprint = cluster_signals.get("tx_fingerprint", {})
+    if fingerprint.get("is_fingerprint"):
+        signals_text += f"  TX COUNT FINGERPRINT: {fingerprint['matching_wallets']}/{fingerprint['total_wallets']} wallets have exactly {fingerprint['dominant_count']} transactions. Bots execute identical scripts → identical tx counts.\n"
 
     prompt = f"""Analyze this cluster of {cluster_size} blockchain wallets for Sybil attack.
 Consider BOTH individual wallet metrics AND the cluster-level signals below.
@@ -581,11 +862,13 @@ Consider BOTH individual wallet metrics AND the cluster-level signals below.
 INDIVIDUAL WALLETS:
 {wallets_text}
 
+CRITICAL: Sharing a funder with multiple other wallets is STRONG evidence of Sybil — real users almost never share the same first funder by coincidence. Err on the side of flagging, not clearing.
+
 CLASSIFICATION RULES:
-- CONFIRMED_SYBIL: chain pattern + shared funder + amount anomaly, OR identical behavior + shared funder
-- LIKELY_SYBIL: shared funder + (amount anomaly OR high similarity OR low tx count)
-- SUSPICIOUS: shared funder only, or single weak indicator
-- CLEAN: diverse funding, varied behavior, no cluster patterns
+- CONFIRMED_SYBIL: shared funder + (chain pattern OR amount anomaly OR identical behavior OR identical tx counts across wallets)
+- LIKELY_SYBIL: shared funder + any one additional indicator (low tx count, similar timing, protocol overlap)
+- SUSPICIOUS: shared funder alone is enough for SUSPICIOUS — do NOT classify as CLEAN if funder is shared
+- CLEAN: ONLY if funding source is independent (no shared funder) AND behavior is diverse
 
 Respond JSON: {{"wallets": [{{"address": "0x...", "risk": "CLEAN|SUSPICIOUS|LIKELY_SYBIL|CONFIRMED_SYBIL", "confidence": 0.0-1.0, "evidence": ["reason1", "reason2"], "reasoning": "brief explanation"}}]}}"""
 

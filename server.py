@@ -24,8 +24,11 @@ from data_fetcher import (
     merge_clusters,
     detect_chain,
     detect_amount_anomaly,
+    detect_tx_count_fingerprint,
     build_funding_tree,
     llm_classify_cluster_enriched,
+    post_llm_override,
+    refine_louvain_clusters,
 )
 
 AVG_AIRDROP_VALUE_USD = 26000  # rough average per-wallet airdrop value
@@ -54,6 +57,9 @@ def run_pipeline(addresses: list[str]) -> dict:
 
     louvain_clusters = build_louvain_clusters(all_wallet_data)
     print(f"[pipeline]   {len(louvain_clusters)} Louvain communities")
+
+    louvain_clusters = refine_louvain_clusters(louvain_clusters, all_wallet_data)
+    print(f"[pipeline]   {len(louvain_clusters)} after refining (removed bidirectional hubs)")
 
     clusters = merge_clusters(funder_clusters, louvain_clusters)
     print(f"[pipeline]   {len(clusters)} merged clusters")
@@ -101,12 +107,16 @@ def run_pipeline(addresses: list[str]) -> dict:
 
         common_funder = find_common_funder(cluster_wallet_data)
 
+        # TX count fingerprint
+        fingerprint_result = detect_tx_count_fingerprint(cluster_wallet_data)
+
         cluster_signals = {
             "chain": chain_result,
             "amount_anomaly": amount_result,
             "funding_tree": tree_result,
             "common_funder": common_funder or "",
             "cluster_size": len(cluster_wallet_data),
+            "tx_fingerprint": fingerprint_result,
         }
 
         # Build features for LLM
@@ -138,6 +148,25 @@ def run_pipeline(addresses: list[str]) -> dict:
         # Enriched classification with all signals
         print(f"[pipeline]   Cluster {cluster_id}: {len(features)} wallets — enriched LLM classification...")
         verdicts = llm_classify_cluster_enriched(features, cluster_signals)
+
+        # Post-LLM override
+        verdicts = post_llm_override(verdicts, features, cluster_signals)
+
+        # Agentic loop: re-investigate low confidence verdicts
+        MAX_AGENTIC_ROUNDS = 3
+        for agentic_round in range(MAX_AGENTIC_ROUNDS):
+            low_conf = [i for i, v in enumerate(verdicts) if v["confidence"] < 0.7 and v["risk"] != "CLEAN"]
+            if not low_conf:
+                break
+            print(f"[pipeline]     Agentic round {agentic_round + 1}: {len(low_conf)} wallets below threshold...")
+            for idx in low_conf:
+                addr = features[idx]["address"]
+                deep_tree = build_funding_tree(addr, max_depth=3)
+                deep_signals = {**cluster_signals, "funding_tree": deep_tree}
+                re_verdicts = llm_classify_cluster_enriched([features[idx]], deep_signals)
+                if re_verdicts:
+                    re_verdicts = post_llm_override(re_verdicts, [features[idx]], deep_signals)
+                    verdicts[idx] = re_verdicts[0]
 
         # Build nodes
         sybil_count = 0
