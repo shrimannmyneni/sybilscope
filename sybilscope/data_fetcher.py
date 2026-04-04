@@ -340,6 +340,71 @@ def merge_clusters(
     return merged
 
 
+def detect_chain(cluster_wallet_data: list[dict]) -> dict:
+    """Detect if a cluster forms a chain-like funding pattern (A→B→C→D→...).
+
+    Traces first_funder relationships to find linear chains.
+    Returns {"is_chain": bool, "chain_order": [str], "chain_height": int}.
+
+    A cluster is considered chain-like if >70% of wallets form a single
+    linear funding path (each wallet funded by the previous one).
+    """
+    if len(cluster_wallet_data) < 2:
+        return {
+            "is_chain": False,
+            "chain_order": [wd["address"] for wd in cluster_wallet_data],
+            "chain_height": len(cluster_wallet_data),
+        }
+
+    # Map address -> wallet data, and funder -> list of funded addresses
+    addr_to_wd: dict[str, dict] = {}
+    funder_to_funded: dict[str, list[str]] = {}
+    funded_addrs: set[str] = set()
+
+    for wd in cluster_wallet_data:
+        addr = wd["address"].lower()
+        addr_to_wd[addr] = wd
+        funder = wd.get("first_funder", "").lower()
+        if funder:
+            if funder not in funder_to_funded:
+                funder_to_funded[funder] = []
+            funder_to_funded[funder].append(addr)
+            funded_addrs.add(addr)
+
+    cluster_addrs = set(addr_to_wd.keys())
+
+    # Find chain roots: wallets whose funder is NOT in the cluster
+    # (i.e., they are the start of the chain within this cluster)
+    chain_roots = []
+    for addr in cluster_addrs:
+        funder = addr_to_wd[addr].get("first_funder", "").lower()
+        if funder not in cluster_addrs:
+            chain_roots.append(addr)
+
+    # Try to build the longest chain starting from each root
+    best_chain: list[str] = []
+    for start in chain_roots:
+        chain = [start]
+        current = start
+        visited = {start}
+        while current in funder_to_funded:
+            next_addrs = [a for a in funder_to_funded[current] if a in cluster_addrs and a not in visited]
+            if len(next_addrs) == 1:
+                current = next_addrs[0]
+                chain.append(current)
+                visited.add(current)
+            else:
+                break  # Branching or dead end — not a pure chain
+        if len(chain) > len(best_chain):
+            best_chain = chain
+
+    # Chain-like if >70% of cluster wallets are in the longest chain
+    is_chain = len(best_chain) >= 0.7 * len(cluster_wallet_data)
+    chain_height = len(best_chain)
+
+    return {"is_chain": is_chain, "chain_order": best_chain, "chain_height": chain_height}
+
+
 def llm_classify_sybil(
     address: str,
     tx_count: int,

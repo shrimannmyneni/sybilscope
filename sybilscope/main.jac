@@ -18,7 +18,8 @@ import from data_fetcher {
     sample_and_find_root,
     build_funding_clusters,
     build_louvain_clusters,
-    merge_clusters
+    merge_clusters,
+    detect_chain
 }
 import json;
 
@@ -91,7 +92,7 @@ Provide specific evidence and confidence score.
 
 walker DataCollector {
     """Traverse graph and collect on-chain data for each wallet node."""
-    has visited: list[str] = [],
+    has visited: set = set(),
         wallet_data: list[dict] = [];
 
     can start with entry {
@@ -102,7 +103,7 @@ walker DataCollector {
         if here.address in self.visited {
             disengage;
         }
-        self.visited.append(here.address);
+        self.visited.add(here.address);
 
         data = fetch_wallet_data(here.address);
         here.created_at = data["created_at"];
@@ -123,7 +124,8 @@ walker SybilJudge {
         cluster_data: list[dict] = [],
         features: list[dict] = [],
         labels: list[str] = [],
-        verdicts: list[dict] = [];
+        verdicts: list[dict] = [],
+        _has_common: bool = False;
 
     can start with entry {
         visit [-->];
@@ -137,15 +139,18 @@ walker SybilJudge {
 
         timing = compute_timing_stats(here.operation_intervals);
 
-        # Common funder detection across the full dataset
-        has_common = find_common_funder(self.wallet_data) is not None;
+        # Compute common funder once and cache it
+        if not self.features {
+            self._has_common = find_common_funder(self.wallet_data) is not None;
+        }
 
-        # Behavior similarity with cluster peers (not full dataset)
-        this_data = fetch_wallet_data(here.address);
+        # Behavior similarity with cluster peers using existing data
         max_similarity = 0.0;
         for wd in self.cluster_data {
             if wd["address"] != here.address {
-                sim = compute_behavior_similarity(this_data, wd);
+                sim = compute_behavior_similarity(
+                    {"protocol_interactions": here.protocol_interactions}, wd
+                );
                 if sim > max_similarity {
                     max_similarity = sim;
                 }
@@ -159,7 +164,7 @@ walker SybilJudge {
             "avg_timing_gap_seconds": timing["avg_gap"],
             "timing_std_seconds": timing["std_gap"],
             "num_protocols": len(here.protocol_interactions),
-            "has_common_funder": has_common,
+            "has_common_funder": self._has_common,
             "behavior_similarity_score": max_similarity
         });
         self.labels.append(here.label);
@@ -251,24 +256,59 @@ with entry {
         clusters_processed += 1;
         print(f"\n  --- Cluster {i + 1}/{len(clusters)}: funder={cluster['funder'][:16]}... ({cluster['size']} wallets) ---");
 
-        # Build sub-graph for this cluster
-        cluster_node = Cluster(funder=cluster["funder"], priority=i);
-        root ++> cluster_node;
-        for addr in cluster["addresses"] {
-            cluster_node ++> Wallet(address=addr);
-        }
-
-        # Collect data for cluster wallets
-        cluster_collector = cluster_node spawn DataCollector();
-
-        # Collect features for cluster wallets (similarity scoped to cluster peers)
-        cluster_wallet_data = [];
+        # Build lookup of pre-collected wallet data for this cluster
+        cluster_addr_set = set(cluster["addresses"]);
+        addr_to_data: dict = {};
         for wd in all_wallet_data {
-            if wd["address"] in cluster["addresses"] {
-                cluster_wallet_data.append(wd);
+            if wd["address"] in cluster_addr_set {
+                addr_to_data[wd["address"]] = wd;
             }
         }
-        judge = SybilJudge(wallet_data=all_wallet_data, cluster_data=cluster_wallet_data);
+        cluster_wallet_data = list(addr_to_data.values());
+
+        # Detect chain-like attacks — if chain height > 8, only analyze first/last 3
+        chain_result = detect_chain(cluster_wallet_data);
+        analyze_addrs = cluster["addresses"];
+        chain_trimmed = 0;
+        if chain_result["is_chain"] and chain_result["chain_height"] > 8 {
+            head_n = 3;
+            tail_n = 3;
+            chain_order = chain_result["chain_order"];
+            chain_height = chain_result["chain_height"];
+            head = chain_order[:head_n];
+            tail = chain_order[-tail_n:];
+            # Deduplicate in case chain is very short after trimming
+            seen: set = set();
+            analyze_addrs = [];
+            for a in head + tail {
+                if a not in seen {
+                    analyze_addrs.append(a);
+                    seen.add(a);
+                }
+            }
+            chain_trimmed = chain_height - len(analyze_addrs);
+            print(f"    Chain detected (height={chain_height}) — analyzing first {head_n} + last {tail_n} nodes, skipping {chain_trimmed} middle nodes");
+        }
+
+        # Build sub-graph for this cluster, pre-populating wallet data from Phase 2
+        cluster_node = Cluster(funder=cluster["funder"], priority=i);
+        root ++> cluster_node;
+        analyze_set = set(analyze_addrs);
+        for addr in analyze_addrs {
+            wd = addr_to_data.get(addr, {});
+            cluster_node ++> Wallet(
+                address=addr,
+                created_at=wd.get("created_at", ""),
+                tx_count=wd.get("tx_count", 0),
+                first_funder=wd.get("first_funder", ""),
+                protocol_interactions=wd.get("protocol_interactions", []),
+                operation_intervals=wd.get("operation_intervals", []),
+                label=wd.get("label", "unknown")
+            );
+        }
+        # Scope similarity data to analyzed wallets only
+        analyze_wallet_data = [wd for wd in cluster_wallet_data if wd["address"] in analyze_set];
+        judge = SybilJudge(wallet_data=all_wallet_data, cluster_data=analyze_wallet_data);
         cluster_node spawn judge;
 
         # Batch-classify entire cluster in a single LLM call
@@ -286,6 +326,7 @@ with entry {
             print(f"    {judge.features[idx]['address'][:12]}... => {v['risk']} (conf: {v['confidence']}) [actual: {judge.labels[idx]}]");
         }
         all_verdicts += judge.verdicts;
+        wallets_skipped += chain_trimmed;
 
         # Early stopping: if this cluster is all CLEAN, skip remaining
         # (they have fewer shared funders = less suspicious)
