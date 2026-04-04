@@ -21,7 +21,7 @@ BASE_URL = "https://api.etherscan.io/v2/api"
 CHAIN_ID = 42161  # Arbitrum One
 
 # Paths to cloned data repos
-HOP_SYBIL_CSV = "data/hop-airdrop/src/data/eliminatedSybilAttackers.csv"
+HOP_SYBIL_CSV = "data/eliminatedSybilAttackers.csv"
 
 
 def load_hop_sybil_addresses(limit: int = 80) -> list[str]:
