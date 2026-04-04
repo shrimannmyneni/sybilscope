@@ -1,14 +1,29 @@
 """SybilScope — On-Chain Sybil Detector using JAC Walker + LLM Reasoning
 
-Leverages JAC's Data Spatial Programming paradigm:
-- Walkers traverse the on-chain transaction graph
-- LLM provides semantic reasoning about behavioral intent
-- Semantic strings guide classification
+Strategy: Root-first BFS detection
+1. Sample random wallets to find the most common funder (suspected sybil hub)
+2. Group all wallets into funding clusters sorted by suspicion
+3. BFS classify cluster-by-cluster from the root outward
+4. Early-stop when a cluster shows clean behavior
 """
 
-import from data_fetcher { fetch_wallet_data }
-import from analyzers { compute_timing_stats, find_common_funder, compute_behavior_similarity }
-import from llm_classifier { llm_classify_sybil }
+import from data_fetcher {
+    fetch_wallet_data,
+    compute_timing_stats,
+    find_common_funder,
+    compute_behavior_similarity,
+    llm_classify_sybil,
+    llm_classify_cluster,
+    llm_classify_cluster_enriched,
+    get_cache_path,
+    sample_and_find_root,
+    build_funding_clusters,
+    build_louvain_clusters,
+    merge_clusters,
+    detect_chain,
+    detect_amount_anomaly,
+    build_funding_tree
+}
 import json;
 
 # ---- Data Types ----
@@ -30,10 +45,9 @@ edge Transfer {
 }
 
 node Cluster {
-    has wallets: list[str] = [],
-        avg_timing_gap: float = 0.0,
-        common_funder: str = "",
-        behavior_similarity: float = 0.0;
+    has funder: str = "",
+        wallets: list[str] = [],
+        priority: int = 0;
 }
 
 enum SybilRisk {
@@ -57,8 +71,6 @@ obj SybilVerdict {
 }
 
 # ---- by llm() declaration (JAC paradigm showcase) ----
-# Note: by llm() requires a JAC LLM plugin at runtime.
-# We use llm_classify_sybil() as the working implementation.
 
 def classify_sybil_ideal(
     address: str,
@@ -81,23 +93,21 @@ Provide specific evidence and confidence score.
 
 # ---- Walkers ----
 
-walker SybilHunter {
-    """Phase 1: Traverse graph, collect on-chain data for each wallet."""
-    has visited: list[str] = [],
+walker DataCollector {
+    """Traverse graph and collect on-chain data for each wallet node."""
+    has visited: set = set(),
         wallet_data: list[dict] = [];
 
-    can hunt with entry {
-        print("SybilHunter: Traversing wallet graph...");
+    can start with entry {
         visit [-->];
     }
 
-    can investigate with Wallet entry {
+    can collect with Wallet entry {
         if here.address in self.visited {
             disengage;
         }
-        self.visited.append(here.address);
+        self.visited.add(here.address);
 
-        # Fetch and populate on-chain data
         data = fetch_wallet_data(here.address);
         here.created_at = data["created_at"];
         here.tx_count = data["tx_count"];
@@ -107,23 +117,24 @@ walker SybilHunter {
         here.label = data["label"];
 
         self.wallet_data.append(data);
-        print(f"  [{len(self.visited)}] {here.address[:12]}... | txs={here.tx_count} | label={here.label}");
-
         visit [-->];
     }
 }
 
 walker SybilJudge {
-    """Phase 2: AI-powered classification using LLM reasoning."""
+    """Collect features for wallets in a cluster, then batch-classify via single LLM call."""
     has wallet_data: list[dict] = [],
-        verdicts: list[dict] = [];
+        cluster_data: list[dict] = [],
+        features: list[dict] = [],
+        labels: list[str] = [],
+        verdicts: list[dict] = [],
+        _has_common: bool = False;
 
-    can judge with entry {
-        print("\nSybilJudge: Classifying wallets with AI reasoning...");
+    can start with entry {
         visit [-->];
     }
 
-    can classify with Wallet entry {
+    can collect_features with Wallet entry {
         if here.tx_count == 0 {
             visit [-->];
             disengage;
@@ -131,44 +142,35 @@ walker SybilJudge {
 
         timing = compute_timing_stats(here.operation_intervals);
 
-        # Common funder detection across cluster
-        has_common = find_common_funder(self.wallet_data) is not None;
+        # Compute common funder once and cache it
+        if not self.features {
+            self._has_common = find_common_funder(self.wallet_data) is not None;
+        }
 
-        # Behavior similarity with peers
-        this_data = fetch_wallet_data(here.address);
+        # Behavior similarity with cluster peers using existing data
         max_similarity = 0.0;
-        for wd in self.wallet_data {
+        for wd in self.cluster_data {
             if wd["address"] != here.address {
-                sim = compute_behavior_similarity(this_data, wd);
+                sim = compute_behavior_similarity(
+                    {"protocol_interactions": here.protocol_interactions}, wd
+                );
                 if sim > max_similarity {
                     max_similarity = sim;
                 }
             }
         }
 
-        # LLM classification
-        verdict = llm_classify_sybil(
-            address=here.address,
-            tx_count=here.tx_count,
-            first_funder=here.first_funder,
-            avg_timing_gap_seconds=timing["avg_gap"],
-            timing_std_seconds=timing["std_gap"],
-            num_protocols=len(here.protocol_interactions),
-            has_common_funder=has_common,
-            behavior_similarity_score=max_similarity,
-            cluster_size=len(self.wallet_data)
-        );
-
-        self.verdicts.append({
+        self.features.append({
             "address": here.address,
-            "risk": verdict["risk"],
-            "confidence": verdict["confidence"],
-            "evidence": verdict["evidence"],
-            "reasoning": verdict["reasoning"],
-            "ground_truth": here.label
+            "tx_count": here.tx_count,
+            "first_funder": here.first_funder,
+            "avg_timing_gap_seconds": timing["avg_gap"],
+            "timing_std_seconds": timing["std_gap"],
+            "num_protocols": len(here.protocol_interactions),
+            "has_common_funder": self._has_common,
+            "behavior_similarity_score": max_similarity
         });
-
-        print(f"  {here.address[:12]}... => {verdict['risk']} (confidence: {verdict['confidence']}) [actual: {here.label}]");
+        self.labels.append(here.label);
 
         visit [-->];
     }
@@ -177,12 +179,12 @@ walker SybilJudge {
 # ---- Entry Point ----
 
 with entry {
-    cache_path = "../demo_data_cache.json";
+    cache_path = get_cache_path();
     with open(cache_path, "r") as f {
         cache = json.load(f);
     }
 
-    # Load addresses with on-chain activity
+    # Load all addresses with on-chain activity
     all_addrs = list(cache.keys());
     addresses = [];
     for addr in all_addrs {
@@ -190,40 +192,271 @@ with entry {
         if isinstance(txs, list) and len(txs) > 0 {
             addresses.append(addr);
         }
-        if len(addresses) >= 10 {
-            break;
-        }
     }
 
     print("=== SybilScope ===");
-    print(f"Loading {len(addresses)} addresses with on-chain activity...\n");
+    print(f"Found {len(addresses)} addresses with on-chain activity\n");
 
-    # Build graph: root -> wallets
-    for addr in addresses {
-        root() ++> Wallet(address=addr);
+    # ---- Phase 1: Sample random wallets to find suspected root funder ----
+    print("Phase 1: Sampling wallets to find suspected sybil root...");
+    root_result = sample_and_find_root(addresses, sample_size=20);
+    root_funder = root_result[0];
+    funder_counts = root_result[1];
+    if root_funder {
+        print(f"  Suspected root funder: {root_funder[:16]}... (funded {funder_counts.get(root_funder, 0)} of {len(funder_counts)} sampled wallets)");
+    } else {
+        print("  No clear root funder found in sample.");
     }
 
-    # Phase 1: Data collection via Walker traversal
-    hunter = root() spawn SybilHunter();
+    # ---- Phase 2: Fetch all wallet data (cheap, no LLM) ----
+    print("\nPhase 2: Collecting on-chain data for all wallets...");
+    flat_root = Cluster();
+    root ++> flat_root;
+    for addr in addresses {
+        flat_root ++> Wallet(address=addr);
+    }
+    collector = flat_root spawn DataCollector();
+    all_wallet_data = collector.wallet_data;
+    print(f"  Collected data for {len(all_wallet_data)} wallets");
 
-    # Phase 2: AI classification
-    judge = SybilJudge(wallet_data=hunter.wallet_data);
-    root() spawn judge;
+    # ---- Phase 3: Build funding + Louvain clusters, then merge ----
+    print("\nPhase 3: Building funding clusters...");
+    funder_clusters = build_funding_clusters(all_wallet_data);
+    print(f"  Found {len(funder_clusters)} funding clusters");
 
-    # Summary
+    print("  Running Louvain community detection on transaction graph...");
+    louvain_clusters = build_louvain_clusters(all_wallet_data);
+    print(f"  Found {len(louvain_clusters)} Louvain communities (2+ wallets)");
+
+    clusters = merge_clusters(funder_clusters, louvain_clusters);
+    print(f"  Merged into {len(clusters)} clusters:");
+    for i in range(len(clusters)) {
+        c = clusters[i];
+        marker = "";
+        if c["funder"] == root_funder {
+            marker = " <-- suspected root";
+        }
+        source_tag = f" [{c['source']}]";
+        print(f"    [{i + 1}] {c['funder'][:24]}... | {c['size']} wallet(s){source_tag}{marker}");
+    }
+
+    # ---- Phase 4: BFS classify with agentic loop ----
+    print("\nPhase 4: BFS classification with agentic reasoning...");
+    all_verdicts: list[dict] = [];
+    clusters_processed = 0;
+    wallets_skipped = 0;
+    MAX_AGENTIC_ROUNDS = 3;  # Iteration cap — prevent infinite expansion
+
+    for i in range(len(clusters)) {
+        cluster = clusters[i];
+        # Skip trivial clusters
+        if cluster["size"] < 2 {
+            wallets_skipped += cluster["size"];
+            print(f"\n  --- Cluster {i + 1}/{len(clusters)}: funder={cluster['funder'][:16]}... ({cluster['size']} wallets) — SKIPPED (too small) ---");
+            continue;
+        }
+
+        clusters_processed += 1;
+        print(f"\n  --- Cluster {i + 1}/{len(clusters)}: funder={cluster['funder'][:16]}... ({cluster['size']} wallets) ---");
+
+        # Build lookup of pre-collected wallet data for this cluster
+        cluster_addr_set = set(cluster["addresses"]);
+        addr_to_data: dict = {};
+        for wd in all_wallet_data {
+            if wd["address"] in cluster_addr_set {
+                addr_to_data[wd["address"]] = wd;
+            }
+        }
+        cluster_wallet_data = list(addr_to_data.values());
+
+        # ---- Compute ALL cluster-level signals ----
+
+        # 1. Chain detection
+        chain_result = detect_chain(cluster_wallet_data);
+        if chain_result["is_chain"] {
+            print(f"    Chain pattern detected (height={chain_result['chain_height']})");
+        }
+
+        # 2. Amount anomaly detection
+        amount_result = detect_amount_anomaly(cluster_wallet_data);
+        if amount_result["is_anomaly"] {
+            print(f"    Amount anomaly: {amount_result['count']}/{amount_result['total_wallets']} wallets received ~{amount_result['dominant_amount']:.6f} ETH");
+        }
+
+        # 3. Multi-hop funding tree (from cluster funder)
+        tree_result = {"root": cluster["funder"], "path": [], "depth": 0, "fan_out": {}};
+        if cluster["funder"] and not cluster["funder"].startswith("louvain") {
+            tree_result = build_funding_tree(cluster["funder"], max_depth=3);
+            if tree_result["depth"] > 1 {
+                print(f"    Multi-hop funding: depth={tree_result['depth']}, root={tree_result['root'][:12]}...");
+            }
+        }
+
+        # 4. Common funder
+        common = find_common_funder(cluster_wallet_data);
+
+        cluster_signals = {
+            "chain": chain_result,
+            "amount_anomaly": amount_result,
+            "funding_tree": tree_result,
+            "common_funder": common if common else "",
+            "cluster_size": len(cluster_wallet_data)
+        };
+
+        # Chain trimming for long chains
+        analyze_addrs = cluster["addresses"];
+        chain_trimmed = 0;
+        if chain_result["is_chain"] and chain_result["chain_height"] > 8 {
+            chain_order = chain_result["chain_order"];
+            chain_height = chain_result["chain_height"];
+            head = chain_order[:3];
+            tail = chain_order[-3:];
+            seen: set = set();
+            analyze_addrs = [];
+            for a in head + tail {
+                if a not in seen {
+                    analyze_addrs.append(a);
+                    seen.add(a);
+                }
+            }
+            chain_trimmed = chain_height - len(analyze_addrs);
+            print(f"    Trimming chain: analyzing first 3 + last 3, skipping {chain_trimmed} middle nodes");
+        }
+
+        # Build sub-graph for this cluster
+        cluster_node = Cluster(funder=cluster["funder"], priority=i);
+        root ++> cluster_node;
+        analyze_set = set(analyze_addrs);
+        for addr in analyze_addrs {
+            wd = addr_to_data.get(addr, {});
+            cluster_node ++> Wallet(
+                address=addr,
+                created_at=wd.get("created_at", ""),
+                tx_count=wd.get("tx_count", 0),
+                first_funder=wd.get("first_funder", ""),
+                protocol_interactions=wd.get("protocol_interactions", []),
+                operation_intervals=wd.get("operation_intervals", []),
+                label=wd.get("label", "unknown")
+            );
+        }
+
+        # Collect features via Walker
+        analyze_wallet_data = [wd for wd in cluster_wallet_data if wd["address"] in analyze_set];
+        judge = SybilJudge(wallet_data=all_wallet_data, cluster_data=analyze_wallet_data);
+        cluster_node spawn judge;
+
+        # ---- Enriched LLM classification with all signals ----
+        print("    Classifying with enriched signals (timing + funding tree + chain + amount)...");
+        batch_verdicts = llm_classify_cluster_enriched(judge.features, cluster_signals);
+
+        for idx in range(len(judge.features)) {
+            v = batch_verdicts[idx];
+            judge.verdicts.append({
+                "address": judge.features[idx]["address"],
+                "risk": v["risk"],
+                "confidence": v["confidence"],
+                "evidence": v["evidence"],
+                "reasoning": v["reasoning"],
+                "ground_truth": judge.labels[idx]
+            });
+            print(f"    {judge.features[idx]['address'][:12]}... => {v['risk']} (conf: {v['confidence']}) [actual: {judge.labels[idx]}]");
+        }
+
+        # ---- AGENTIC LOOP: Low confidence → deeper investigation ----
+        agentic_round = 0;
+        low_conf_indices: list[int] = [];
+        for idx in range(len(judge.verdicts)) {
+            if judge.verdicts[idx]["confidence"] < 0.7 and judge.verdicts[idx]["risk"] != "CLEAN" {
+                low_conf_indices.append(idx);
+            }
+        }
+
+        while len(low_conf_indices) > 0 and agentic_round < MAX_AGENTIC_ROUNDS {
+            agentic_round += 1;
+            print(f"    [Agentic round {agentic_round}/{MAX_AGENTIC_ROUNDS}] {len(low_conf_indices)} wallets below confidence threshold — investigating deeper...");
+
+            # Re-classify low-confidence wallets with individual deep analysis
+            for idx in low_conf_indices {
+                addr = judge.verdicts[idx]["address"];
+                # Fetch deeper data — build individual funding tree
+                deep_tree = build_funding_tree(addr, max_depth=3);
+                deep_signals = {
+                    "chain": chain_result,
+                    "amount_anomaly": amount_result,
+                    "funding_tree": deep_tree,
+                    "common_funder": common if common else "",
+                    "cluster_size": len(cluster_wallet_data)
+                };
+
+                # Re-classify with deeper context
+                re_verdicts = llm_classify_cluster_enriched([judge.features[idx]], deep_signals);
+                if len(re_verdicts) > 0 {
+                    old_conf = judge.verdicts[idx]["confidence"];
+                    new_v = re_verdicts[0];
+                    judge.verdicts[idx]["risk"] = new_v["risk"];
+                    judge.verdicts[idx]["confidence"] = new_v["confidence"];
+                    judge.verdicts[idx]["evidence"] = new_v["evidence"];
+                    judge.verdicts[idx]["reasoning"] = new_v["reasoning"];
+                    print(f"      {addr[:12]}... re-classified: {new_v['risk']} (conf: {old_conf} -> {new_v['confidence']})");
+                }
+            }
+
+            # Check if there are still low-confidence verdicts
+            low_conf_indices = [];
+            for idx in range(len(judge.verdicts)) {
+                if judge.verdicts[idx]["confidence"] < 0.7 and judge.verdicts[idx]["risk"] != "CLEAN" {
+                    low_conf_indices.append(idx);
+                }
+            }
+        }
+
+        if agentic_round > 0 {
+            print(f"    Agentic loop completed after {agentic_round} round(s)");
+        }
+
+        all_verdicts += judge.verdicts;
+        wallets_skipped += chain_trimmed;
+
+        # Early stopping: if this cluster is all CLEAN, skip remaining
+        sybil_in_cluster = 0;
+        for v in judge.verdicts {
+            if v["risk"] != "CLEAN" {
+                sybil_in_cluster += 1;
+            }
+        }
+
+        if len(judge.verdicts) > 0 and sybil_in_cluster == 0 {
+            remaining = 0;
+            for j in range(i + 1, len(clusters)) {
+                remaining += clusters[j]["size"];
+            }
+            if remaining > 0 {
+                print(f"    Cluster is CLEAN — skipping {len(clusters) - i - 1} remaining cluster(s) ({remaining} wallets)");
+                wallets_skipped = remaining;
+            }
+            break;
+        }
+
+        print(f"    Flagged {sybil_in_cluster}/{len(judge.verdicts)} as sybil — continuing to next cluster...");
+    }
+
+    # ---- Summary ----
     print("\n=== Summary ===");
-    print(f"Wallets analyzed: {len(hunter.visited)}");
-    print(f"Verdicts issued:  {len(judge.verdicts)}");
+    print(f"Clusters processed: {clusters_processed}/{len(clusters)}");
+    print(f"Wallets classified: {len(all_verdicts)}");
+    if wallets_skipped > 0 {
+        print(f"Wallets skipped (early stop): {wallets_skipped}");
+    }
 
     sybil_count = 0;
-    for v in judge.verdicts {
+    for v in all_verdicts {
         if v["risk"] != "CLEAN" {
             sybil_count += 1;
         }
     }
-    print(f"Flagged as Sybil: {sybil_count}/{len(judge.verdicts)}");
+    print(f"Flagged as Sybil: {sybil_count}/{len(all_verdicts)}");
 
-    for v in judge.verdicts {
+    for v in all_verdicts {
         print(f"\n{v['address']}");
         print(f"  AI Risk:      {v['risk']}");
         print(f"  Confidence:   {v['confidence']}");
@@ -239,8 +472,7 @@ with entry {
         }
     }
 
-    # Common funder analysis
-    common = find_common_funder(hunter.wallet_data);
+    common = find_common_funder(all_wallet_data);
     if common {
         print(f"\nCommon funder detected across cluster: {common}");
     }
