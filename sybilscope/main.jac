@@ -13,9 +13,12 @@ import from data_fetcher {
     find_common_funder,
     compute_behavior_similarity,
     llm_classify_sybil,
+    llm_classify_cluster,
     get_cache_path,
     sample_and_find_root,
-    build_funding_clusters
+    build_funding_clusters,
+    build_louvain_clusters,
+    merge_clusters
 }
 import json;
 
@@ -115,15 +118,18 @@ walker DataCollector {
 }
 
 walker SybilJudge {
-    """Classify wallets in a cluster using LLM reasoning."""
+    """Collect features for wallets in a cluster, then batch-classify via single LLM call."""
     has wallet_data: list[dict] = [],
+        cluster_data: list[dict] = [],
+        features: list[dict] = [],
+        labels: list[str] = [],
         verdicts: list[dict] = [];
 
     can start with entry {
         visit [-->];
     }
 
-    can classify with Wallet entry {
+    can collect_features with Wallet entry {
         if here.tx_count == 0 {
             visit [-->];
             disengage;
@@ -134,10 +140,10 @@ walker SybilJudge {
         # Common funder detection across the full dataset
         has_common = find_common_funder(self.wallet_data) is not None;
 
-        # Behavior similarity with peers
+        # Behavior similarity with cluster peers (not full dataset)
         this_data = fetch_wallet_data(here.address);
         max_similarity = 0.0;
-        for wd in self.wallet_data {
+        for wd in self.cluster_data {
             if wd["address"] != here.address {
                 sim = compute_behavior_similarity(this_data, wd);
                 if sim > max_similarity {
@@ -146,28 +152,17 @@ walker SybilJudge {
             }
         }
 
-        verdict = llm_classify_sybil(
-            address=here.address,
-            tx_count=here.tx_count,
-            first_funder=here.first_funder,
-            avg_timing_gap_seconds=timing["avg_gap"],
-            timing_std_seconds=timing["std_gap"],
-            num_protocols=len(here.protocol_interactions),
-            has_common_funder=has_common,
-            behavior_similarity_score=max_similarity,
-            cluster_size=len(self.wallet_data)
-        );
-
-        self.verdicts.append({
+        self.features.append({
             "address": here.address,
-            "risk": verdict["risk"],
-            "confidence": verdict["confidence"],
-            "evidence": verdict["evidence"],
-            "reasoning": verdict["reasoning"],
-            "ground_truth": here.label
+            "tx_count": here.tx_count,
+            "first_funder": here.first_funder,
+            "avg_timing_gap_seconds": timing["avg_gap"],
+            "timing_std_seconds": timing["std_gap"],
+            "num_protocols": len(here.protocol_interactions),
+            "has_common_funder": has_common,
+            "behavior_similarity_score": max_similarity
         });
-
-        print(f"    {here.address[:12]}... => {verdict['risk']} (conf: {verdict['confidence']}) [actual: {here.label}]");
+        self.labels.append(here.label);
 
         visit [-->];
     }
@@ -216,17 +211,25 @@ with entry {
     all_wallet_data = collector.wallet_data;
     print(f"  Collected data for {len(all_wallet_data)} wallets");
 
-    # ---- Phase 3: Build funding clusters sorted by suspicion ----
+    # ---- Phase 3: Build funding + Louvain clusters, then merge ----
     print("\nPhase 3: Building funding clusters...");
-    clusters = build_funding_clusters(all_wallet_data);
-    print(f"  Found {len(clusters)} funding clusters:");
+    funder_clusters = build_funding_clusters(all_wallet_data);
+    print(f"  Found {len(funder_clusters)} funding clusters");
+
+    print("  Running Louvain community detection on transaction graph...");
+    louvain_clusters = build_louvain_clusters(all_wallet_data);
+    print(f"  Found {len(louvain_clusters)} Louvain communities (2+ wallets)");
+
+    clusters = merge_clusters(funder_clusters, louvain_clusters);
+    print(f"  Merged into {len(clusters)} clusters:");
     for i in range(len(clusters)) {
         c = clusters[i];
         marker = "";
         if c["funder"] == root_funder {
             marker = " <-- suspected root";
         }
-        print(f"    [{i + 1}] funder={c['funder'][:16]}... | {c['size']} wallet(s){marker}");
+        source_tag = f" [{c['source']}]";
+        print(f"    [{i + 1}] {c['funder'][:24]}... | {c['size']} wallet(s){source_tag}{marker}");
     }
 
     # ---- Phase 4: BFS classify cluster-by-cluster ----
@@ -258,9 +261,30 @@ with entry {
         # Collect data for cluster wallets
         cluster_collector = cluster_node spawn DataCollector();
 
-        # LLM classify this cluster
-        judge = SybilJudge(wallet_data=all_wallet_data);
+        # Collect features for cluster wallets (similarity scoped to cluster peers)
+        cluster_wallet_data = [];
+        for wd in all_wallet_data {
+            if wd["address"] in cluster["addresses"] {
+                cluster_wallet_data.append(wd);
+            }
+        }
+        judge = SybilJudge(wallet_data=all_wallet_data, cluster_data=cluster_wallet_data);
         cluster_node spawn judge;
+
+        # Batch-classify entire cluster in a single LLM call
+        batch_verdicts = llm_classify_cluster(judge.features);
+        for idx in range(len(judge.features)) {
+            v = batch_verdicts[idx];
+            judge.verdicts.append({
+                "address": judge.features[idx]["address"],
+                "risk": v["risk"],
+                "confidence": v["confidence"],
+                "evidence": v["evidence"],
+                "reasoning": v["reasoning"],
+                "ground_truth": judge.labels[idx]
+            });
+            print(f"    {judge.features[idx]['address'][:12]}... => {v['risk']} (conf: {v['confidence']}) [actual: {judge.labels[idx]}]");
+        }
         all_verdicts += judge.verdicts;
 
         # Early stopping: if this cluster is all CLEAN, skip remaining

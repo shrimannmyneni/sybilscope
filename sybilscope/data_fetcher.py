@@ -212,6 +212,134 @@ def build_funding_clusters(all_wallet_data: list[dict]) -> list[dict]:
     return clusters
 
 
+def build_louvain_clusters(all_wallet_data: list[dict]) -> list[dict]:
+    """Detect communities via Louvain on the wallet transaction graph.
+
+    Builds a weighted graph where:
+    - Nodes = wallet addresses in the dataset
+    - Edges = transfer relationships (from/to in transactions), weighted by tx count
+    Then runs Louvain community detection to find tightly connected groups.
+
+    Returns list of {"community": int, "addresses": [str], "size": int},
+    sorted by size descending.
+    """
+    import networkx as nx
+    import community as community_louvain
+
+    # Set of addresses we're analyzing
+    addr_set = set(wd["address"].lower() for wd in all_wallet_data)
+
+    G = nx.Graph()
+    for addr in addr_set:
+        G.add_node(addr)
+
+    # Build edges from transaction data
+    for wd in all_wallet_data:
+        addr = wd["address"].lower()
+        for tx in wd.get("transactions", []):
+            from_addr = tx.get("from", "").lower()
+            to_addr = tx.get("to", "").lower()
+
+            # Only add edges between wallets in our dataset
+            if from_addr in addr_set and to_addr in addr_set and from_addr != to_addr:
+                if G.has_edge(from_addr, to_addr):
+                    G[from_addr][to_addr]["weight"] += 1
+                else:
+                    G.add_edge(from_addr, to_addr, weight=1)
+
+        # Also check internal transactions
+        for tx in wd.get("internal_transactions", []):
+            from_addr = tx.get("from", "").lower()
+            to_addr = tx.get("to", "").lower()
+            if from_addr in addr_set and to_addr in addr_set and from_addr != to_addr:
+                if G.has_edge(from_addr, to_addr):
+                    G[from_addr][to_addr]["weight"] += 1
+                else:
+                    G.add_edge(from_addr, to_addr, weight=1)
+
+        # Token transfers too
+        for tx in wd.get("token_transfers", []):
+            from_addr = tx.get("from", "").lower()
+            to_addr = tx.get("to", "").lower()
+            if from_addr in addr_set and to_addr in addr_set and from_addr != to_addr:
+                if G.has_edge(from_addr, to_addr):
+                    G[from_addr][to_addr]["weight"] += 1
+                else:
+                    G.add_edge(from_addr, to_addr, weight=1)
+
+    # Run Louvain if there are edges, otherwise no communities to find
+    if G.number_of_edges() == 0:
+        return []
+
+    partition = community_louvain.best_partition(G, weight="weight")
+
+    # Group addresses by community
+    community_to_addrs: dict[int, list[str]] = {}
+    for addr, comm_id in partition.items():
+        if comm_id not in community_to_addrs:
+            community_to_addrs[comm_id] = []
+        community_to_addrs[comm_id].append(addr)
+
+    clusters = []
+    for comm_id, addrs in community_to_addrs.items():
+        if len(addrs) >= 2:  # Only include communities with 2+ wallets
+            clusters.append({
+                "community": comm_id,
+                "addresses": addrs,
+                "size": len(addrs),
+            })
+    clusters.sort(key=lambda c: c["size"], reverse=True)
+    return clusters
+
+
+def merge_clusters(
+    funder_clusters: list[dict], louvain_clusters: list[dict]
+) -> list[dict]:
+    """Merge funder-based and Louvain-based clusters, deduplicating wallets.
+
+    Priority: Louvain communities that are larger than funder groups get priority
+    since they capture more complex relationships. Remaining funder-only clusters
+    are appended.
+
+    Returns list of {"funder": str, "addresses": [str], "size": int, "source": str}.
+    """
+    merged = []
+    seen_addrs: set[str] = set()
+
+    # Combine and sort all clusters by size descending
+    all_clusters = []
+    for c in louvain_clusters:
+        all_clusters.append({
+            "funder": f"louvain-community-{c['community']}",
+            "addresses": c["addresses"],
+            "size": c["size"],
+            "source": "louvain",
+        })
+    for c in funder_clusters:
+        all_clusters.append({
+            "funder": c["funder"],
+            "addresses": c["addresses"],
+            "size": c["size"],
+            "source": "funder",
+        })
+    all_clusters.sort(key=lambda c: c["size"], reverse=True)
+
+    for c in all_clusters:
+        # Filter out already-seen addresses
+        new_addrs = [a for a in c["addresses"] if a.lower() not in seen_addrs]
+        if len(new_addrs) >= 2:
+            merged.append({
+                "funder": c["funder"],
+                "addresses": new_addrs,
+                "size": len(new_addrs),
+                "source": c["source"],
+            })
+            for a in new_addrs:
+                seen_addrs.add(a.lower())
+
+    return merged
+
+
 def llm_classify_sybil(
     address: str,
     tx_count: int,
@@ -272,3 +400,87 @@ Respond in this exact JSON format:
             "evidence": [f"LLM classification unavailable: {e}"],
             "reasoning": "Fallback verdict — LLM call failed.",
         }
+
+
+def llm_classify_cluster(wallet_features: list[dict]) -> list[dict]:
+    """Classify all wallets in a cluster with a single LLM call."""
+    from openai import OpenAI
+
+    if not wallet_features:
+        return []
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    # Build a summary block for each wallet
+    wallet_blocks = []
+    for i, wf in enumerate(wallet_features):
+        wallet_blocks.append(
+            f"Wallet #{i + 1}: {wf['address']}\n"
+            f"  Transaction count: {wf['tx_count']}\n"
+            f"  First funder: {wf['first_funder']}\n"
+            f"  Avg timing gap: {wf['avg_timing_gap_seconds']:.1f}s\n"
+            f"  Timing std dev: {wf['timing_std_seconds']:.1f}s\n"
+            f"  Protocols interacted: {wf['num_protocols']}\n"
+            f"  Shares funder with cluster: {wf['has_common_funder']}\n"
+            f"  Behavior similarity (Jaccard): {wf['behavior_similarity_score']:.3f}\n"
+        )
+
+    wallets_text = "\n".join(wallet_blocks)
+    cluster_size = len(wallet_features)
+
+    prompt = f"""Analyze the following cluster of {cluster_size} blockchain wallets and determine if each is part of a Sybil attack.
+Consider both individual metrics AND cross-wallet patterns (shared funders, similar timing, overlapping protocols).
+
+{wallets_text}
+
+Key Sybil indicators:
+- Low tx count (<20) with minimum qualifying interactions only
+- Shared first funder across multiple wallets
+- Regular timing gaps (low std relative to mean = bot-like precision)
+- High behavior similarity with peers (>0.5 = identical protocol usage)
+- Large cluster size sharing same funder
+
+Respond with a JSON object containing a "wallets" array with exactly {cluster_size} entries, one per wallet in order:
+{{"wallets": [{{"address": "0x...", "risk": "CLEAN|SUSPICIOUS|LIKELY_SYBIL|CONFIRMED_SYBIL", "confidence": 0.0-1.0, "evidence": ["reason1", "reason2"], "reasoning": "brief explanation"}}]}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        verdicts = result.get("wallets", [])
+
+        # Normalize and return
+        out = []
+        for i, wf in enumerate(wallet_features):
+            if i < len(verdicts):
+                v = verdicts[i]
+                out.append({
+                    "risk": v.get("risk", "CLEAN"),
+                    "confidence": float(v.get("confidence", 0.0)),
+                    "evidence": v.get("evidence", []),
+                    "reasoning": v.get("reasoning", ""),
+                })
+            else:
+                out.append({
+                    "risk": "SUSPICIOUS",
+                    "confidence": 0.0,
+                    "evidence": ["LLM did not return verdict for this wallet"],
+                    "reasoning": "Fallback — missing from batch response.",
+                })
+        return out
+
+    except Exception as e:
+        print(f"  [WARNING] Batch LLM classification failed: {e}")
+        return [
+            {
+                "risk": "SUSPICIOUS",
+                "confidence": 0.0,
+                "evidence": [f"LLM classification unavailable: {e}"],
+                "reasoning": "Fallback verdict — LLM call failed.",
+            }
+            for _ in wallet_features
+        ]
