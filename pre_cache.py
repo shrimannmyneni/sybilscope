@@ -10,6 +10,7 @@ import requests
 import json
 import time
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -74,8 +75,8 @@ def main():
         print("Error: ETHERSCAN_API_KEY not found in .env")
         return
 
-    # Load real Sybil addresses from HOP dataset (first 80)
-    hop_sybils = load_hop_sybil_addresses(limit=80)
+    # Load real Sybil addresses from HOP dataset
+    hop_sybils = load_hop_sybil_addresses(limit=200)
     print(f"Loaded {len(hop_sybils)} HOP Sybil addresses")
     print(f"Loaded {len(ARBITRUM_SYBIL_SAMPLES)} Arbitrum sample addresses")
 
@@ -83,40 +84,49 @@ def main():
     all_addresses = sybil_addresses + LEGITIMATE_ADDRESSES
     total = len(all_addresses)
 
+    # Load existing cache to skip already-fetched addresses
     cache = {}
+    if os.path.exists("demo_data_cache.json"):
+        with open("demo_data_cache.json", "r") as f:
+            cache = json.load(f)
+        print(f"Existing cache: {len(cache)} addresses")
 
-    for i, addr in enumerate(all_addresses, 1):
+    # Build list of addresses to fetch (skip already cached)
+    cached_lower = {k.lower() for k in cache}
+    to_fetch = []
+    for addr in all_addresses:
+        if addr in cache or addr.lower() in cached_lower:
+            continue
         label = "legitimate" if addr in LEGITIMATE_ADDRESSES else "sybil"
         source = "legitimate"
         if addr in ARBITRUM_SYBIL_SAMPLES:
             source = "arbitrum_foundation"
         elif addr in hop_sybils:
             source = "hop_protocol"
+        to_fetch.append((addr, label, source))
 
-        print(f"[{i}/{total}] Caching {addr[:12]}... ({source})")
+    skipped = total - len(to_fetch)
+    print(f"Skipping {skipped} already cached, fetching {len(to_fetch)} new addresses")
 
+    def fetch_one(addr: str, label: str, source: str) -> tuple:
+        """Fetch all data for one address. Returns (addr, entry) or (addr, error)."""
         try:
             txs = fetch_transactions(addr)
-            time.sleep(0.25)
+            time.sleep(0.2)  # rate limit per thread
             internal = fetch_internal_transactions(addr)
-            time.sleep(0.25)
+            time.sleep(0.2)
             tokens = fetch_token_transfers(addr)
-            time.sleep(0.25)
-
-            cache[addr] = {
+            entry = {
                 "transactions": txs,
                 "internal": internal,
                 "tokens": tokens,
                 "label": label,
                 "source": source,
             }
-
             tx_count = len(txs.get("result", []))
-            print(f"           -> {tx_count} transactions")
-
+            return (addr, entry, tx_count, None)
         except Exception as e:
-            print(f"           -> ERROR: {e}")
-            cache[addr] = {
+            entry = {
                 "transactions": {"result": []},
                 "internal": {"result": []},
                 "tokens": {"result": []},
@@ -124,7 +134,27 @@ def main():
                 "source": source,
                 "error": str(e),
             }
-            time.sleep(1)
+            return (addr, entry, 0, str(e))
+
+    # Concurrent fetching — 4 workers (stay under 5 calls/sec Etherscan limit)
+    completed = 0
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(fetch_one, addr, label, source): addr
+                   for addr, label, source in to_fetch}
+        for future in as_completed(futures):
+            completed += 1
+            addr, entry, tx_count, error = future.result()
+            cache[addr] = entry
+            if error:
+                print(f"[{completed}/{len(to_fetch)}] {addr[:12]}... ERROR: {error}")
+            else:
+                print(f"[{completed}/{len(to_fetch)}] {addr[:12]}... -> {tx_count} txs")
+
+            # Save every 20 addresses in case of crash
+            if completed % 20 == 0:
+                with open("demo_data_cache.json", "w") as f:
+                    json.dump(cache, f, indent=2)
+                print(f"  (checkpoint saved: {len(cache)} total)")
 
     with open("demo_data_cache.json", "w") as f:
         json.dump(cache, f, indent=2)

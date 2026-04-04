@@ -22,7 +22,10 @@ import from data_fetcher {
     merge_clusters,
     detect_chain,
     detect_amount_anomaly,
-    build_funding_tree
+    detect_tx_count_fingerprint,
+    build_funding_tree,
+    post_llm_override,
+    refine_louvain_clusters
 }
 import json;
 
@@ -228,6 +231,13 @@ with entry {
     louvain_clusters = build_louvain_clusters(all_wallet_data);
     print(f"  Found {len(louvain_clusters)} Louvain communities (2+ wallets)");
 
+    # Refine large clusters — remove bidirectional hub nodes
+    louvain_clusters_raw = len(louvain_clusters);
+    louvain_clusters = refine_louvain_clusters(louvain_clusters, all_wallet_data);
+    if len(louvain_clusters) != louvain_clusters_raw {
+        print(f"  Refined: {louvain_clusters_raw} -> {len(louvain_clusters)} clusters (removed bidirectional hubs)");
+    }
+
     clusters = merge_clusters(funder_clusters, louvain_clusters);
     print(f"  Merged into {len(clusters)} clusters:");
     for i in range(len(clusters)) {
@@ -295,12 +305,19 @@ with entry {
         # 4. Common funder
         common = find_common_funder(cluster_wallet_data);
 
+        # 5. TX count fingerprint (bot signature: identical tx counts)
+        fingerprint_result = detect_tx_count_fingerprint(cluster_wallet_data);
+        if fingerprint_result["is_fingerprint"] {
+            print(f"    TX fingerprint: {fingerprint_result['matching_wallets']}/{fingerprint_result['total_wallets']} wallets have exactly {fingerprint_result['dominant_count']} txs");
+        }
+
         cluster_signals = {
             "chain": chain_result,
             "amount_anomaly": amount_result,
             "funding_tree": tree_result,
             "common_funder": common if common else "",
-            "cluster_size": len(cluster_wallet_data)
+            "cluster_size": len(cluster_wallet_data),
+            "tx_fingerprint": fingerprint_result
         };
 
         # Chain trimming for long chains
@@ -346,8 +363,11 @@ with entry {
         cluster_node spawn judge;
 
         # ---- Enriched LLM classification with all signals ----
-        print("    Classifying with enriched signals (timing + funding tree + chain + amount)...");
+        print("    Classifying with enriched signals (timing + funding tree + chain + amount + fingerprint)...");
         batch_verdicts = llm_classify_cluster_enriched(judge.features, cluster_signals);
+
+        # Post-LLM override: catch false negatives
+        batch_verdicts = post_llm_override(batch_verdicts, judge.features, cluster_signals);
 
         for idx in range(len(judge.features)) {
             v = batch_verdicts[idx];
@@ -362,7 +382,7 @@ with entry {
             print(f"    {judge.features[idx]['address'][:12]}... => {v['risk']} (conf: {v['confidence']}) [actual: {judge.labels[idx]}]");
         }
 
-        # ---- AGENTIC LOOP: Low confidence → deeper investigation ----
+        # ---- AGENTIC LOOP: Low confidence → batch deeper investigation ----
         agentic_round = 0;
         low_conf_indices: list[int] = [];
         for idx in range(len(judge.verdicts)) {
@@ -373,35 +393,49 @@ with entry {
 
         while len(low_conf_indices) > 0 and agentic_round < MAX_AGENTIC_ROUNDS {
             agentic_round += 1;
-            print(f"    [Agentic round {agentic_round}/{MAX_AGENTIC_ROUNDS}] {len(low_conf_indices)} wallets below confidence threshold — investigating deeper...");
+            print(f"    [Agentic round {agentic_round}/{MAX_AGENTIC_ROUNDS}] {len(low_conf_indices)} wallets below confidence threshold — batch re-investigation...");
 
-            # Re-classify low-confidence wallets with individual deep analysis
+            # Build enriched features for all low-confidence wallets at once
+            batch_features: list[dict] = [];
+            batch_indices: list[int] = [];
+            best_deep_signals = cluster_signals;
+
             for idx in low_conf_indices {
                 addr = judge.verdicts[idx]["address"];
-                # Fetch deeper data — build individual funding tree
                 deep_tree = build_funding_tree(addr, max_depth=3);
-                deep_signals = {
-                    "chain": chain_result,
-                    "amount_anomaly": amount_result,
-                    "funding_tree": deep_tree,
-                    "common_funder": common if common else "",
-                    "cluster_size": len(cluster_wallet_data)
-                };
+                # Use deepest tree found as the signal for the batch
+                if deep_tree["depth"] > best_deep_signals.get("funding_tree", {}).get("depth", 0) {
+                    best_deep_signals = {
+                        "chain": chain_result,
+                        "amount_anomaly": amount_result,
+                        "funding_tree": deep_tree,
+                        "common_funder": common if common else "",
+                        "cluster_size": len(cluster_wallet_data),
+                        "tx_fingerprint": fingerprint_result
+                    };
+                }
+                batch_features.append(judge.features[idx]);
+                batch_indices.append(idx);
+            }
 
-                # Re-classify with deeper context
-                re_verdicts = llm_classify_cluster_enriched([judge.features[idx]], deep_signals);
-                if len(re_verdicts) > 0 {
+            # Single LLM call for all low-confidence wallets
+            re_verdicts = llm_classify_cluster_enriched(batch_features, best_deep_signals);
+            re_verdicts = post_llm_override(re_verdicts, batch_features, best_deep_signals);
+
+            for bi in range(len(batch_indices)) {
+                idx = batch_indices[bi];
+                if bi < len(re_verdicts) {
                     old_conf = judge.verdicts[idx]["confidence"];
-                    new_v = re_verdicts[0];
+                    new_v = re_verdicts[bi];
                     judge.verdicts[idx]["risk"] = new_v["risk"];
                     judge.verdicts[idx]["confidence"] = new_v["confidence"];
                     judge.verdicts[idx]["evidence"] = new_v["evidence"];
                     judge.verdicts[idx]["reasoning"] = new_v["reasoning"];
-                    print(f"      {addr[:12]}... re-classified: {new_v['risk']} (conf: {old_conf} -> {new_v['confidence']})");
+                    print(f"      {judge.verdicts[idx]['address'][:12]}... re-classified: {new_v['risk']} (conf: {old_conf} -> {new_v['confidence']})");
                 }
             }
 
-            # Check if there are still low-confidence verdicts
+            # Check remaining low-confidence
             low_conf_indices = [];
             for idx in range(len(judge.verdicts)) {
                 if judge.verdicts[idx]["confidence"] < 0.7 and judge.verdicts[idx]["risk"] != "CLEAN" {
