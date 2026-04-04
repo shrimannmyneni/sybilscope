@@ -1,0 +1,13 @@
+[project]
+name = "sybilscope"
+version = "0.1.0"
+description = "On-Chain Sybil Detector using JAC Walker + by llm()"
+entry-point = "main.jac"
+
+[dependencies]
+
+[dev-dependencies]
+watchdog = ">=3.0.0"
+
+[plugins.byllm.model]
+default_model = "openai:gpt-4o-mini"
