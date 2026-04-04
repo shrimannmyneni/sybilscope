@@ -1,0 +1,212 @@
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+=== SybilScope ===
+Found 64 addresses with on-chain activity
+
+Phase 1: Sampling wallets to find suspected sybil root...
+  Suspected root funder: 0x33ceb27b39d2bb... (funded 3 of 15 sampled wallets)
+
+Phase 2: Collecting on-chain data for all wallets...
+  Collected data for 64 wallets
+
+Phase 3: Building funding clusters...
+  Found 54 funding clusters
+  Running Louvain community detection on transaction graph...
+  Found 0 Louvain communities (2+ wallets)
+  Merged into 3 clusters:
+    [1] 0x33ceb27b39d2bb7d2e61f7... | 7 wallet(s) [funder] <-- suspected root
+    [2] 0x80c67432656d59144ceff9... | 4 wallet(s) [funder]
+    [3] 0xe592427a0aece92de3edee... | 2 wallet(s) [funder]
+
+Phase 4: BFS classification with agentic reasoning...
+
+  --- Cluster 1/3: funder=0x33ceb27b39d2bb... (7 wallets) ---
+    Classifying with enriched signals (timing + funding tree + chain + amount)...
+    0x001d022975... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x00435cf222... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x0050beff94... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x0078049f17... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x00b7ddb0fa... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x0140ba84fa... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x0149884c79... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    [Agentic round 1/3] 7 wallets below confidence threshold — investigating deeper...
+      0x001d022975... re-classified: LIKELY_SYBIL (conf: 0.5 -> 0.85)
+      0x00435cf222... re-classified: LIKELY_SYBIL (conf: 0.5 -> 0.75)
+      0x0050beff94... re-classified: LIKELY_SYBIL (conf: 0.5 -> 0.85)
+      0x0078049f17... re-classified: LIKELY_SYBIL (conf: 0.5 -> 0.75)
+      0x00b7ddb0fa... re-classified: SUSPICIOUS (conf: 0.5 -> 0.7)
+      0x0140ba84fa... re-classified: SUSPICIOUS (conf: 0.5 -> 0.6)
+      0x0149884c79... re-classified: SUSPICIOUS (conf: 0.5 -> 0.7)
+    [Agentic round 2/3] 1 wallets below confidence threshold — investigating deeper...
+      0x0140ba84fa... re-classified: SUSPICIOUS (conf: 0.6 -> 0.7)
+    Agentic loop completed after 2 round(s)
+    Flagged 7/7 as sybil — continuing to next cluster...
+
+  --- Cluster 2/3: funder=0x80c67432656d59... (4 wallets) ---
+    Multi-hop funding: depth=2, root=0x9413b54f04...
+    Classifying with enriched signals (timing + funding tree + chain + amount)...
+    0x000240e384... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    0x00035ab469... => LIKELY_SYBIL (conf: 0.7) [actual: sybil]
+    0x00f1ee4a13... => LIKELY_SYBIL (conf: 0.7) [actual: sybil]
+    0x016677f3a6... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    [Agentic round 1/3] 2 wallets below confidence threshold — investigating deeper...
+      0x000240e384... re-classified: SUSPICIOUS (conf: 0.6 -> 0.6)
+      0x016677f3a6... re-classified: SUSPICIOUS (conf: 0.6 -> 0.7)
+    [Agentic round 2/3] 1 wallets below confidence threshold — investigating deeper...
+      0x000240e384... re-classified: SUSPICIOUS (conf: 0.6 -> 0.7)
+    Agentic loop completed after 2 round(s)
+    Flagged 4/4 as sybil — continuing to next cluster...
+
+  --- Cluster 3/3: funder=0xe592427a0aece9... (2 wallets) ---
+    Classifying with enriched signals (timing + funding tree + chain + amount)...
+    0x00357a0042... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    0x00aa6ebb35... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    [Agentic round 1/3] 2 wallets below confidence threshold — investigating deeper...
+      0x00357a0042... re-classified: SUSPICIOUS (conf: 0.6 -> 0.7)
+      0x00aa6ebb35... re-classified: SUSPICIOUS (conf: 0.6 -> 0.7)
+    Agentic loop completed after 1 round(s)
+    Flagged 2/2 as sybil — continuing to next cluster...
+
+=== Summary ===
+Clusters processed: 3/3
+Wallets classified: 13
+Flagged as Sybil: 13/13
+
+0x001d022975a75cefcac6857d99543811f068d9a9
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.85
+  Ground Truth: sybil
+  Evidence:
+    - shared funder
+    - low transaction count
+    - high behavior similarity
+  Reasoning:    The wallet shares a common funder with the cluster, has a low transaction count, and exhibits identical behavior to the other wallet in the cluster, indicating a likelihood of being part of a Sybil attack.
+
+0x00435cf222fba348a90e39e0b56d262edb8ec50d
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.75
+  Ground Truth: sybil
+  Evidence:
+    - Shared funder with cluster (0x33ceb27b39d2bb...)
+    - High behavior similarity (Jaccard: 0.696)
+  Reasoning:    The wallet shares a common funder with the cluster and exhibits a high similarity in behavior, which suggests a potential Sybil attack. Although there are no amount anomalies or chain patterns detected, the combination of shared funding and behavioral similarity raises concerns.
+
+0x0050beff948011d00d60404d65c4deb40084fd25
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.85
+  Ground Truth: sybil
+  Evidence:
+    - shared funder
+    - low transaction count
+    - high behavior similarity
+  Reasoning:    The wallet shares a common funder with the cluster and has a low transaction count, along with identical behavior to the funder, indicating a potential Sybil attack.
+
+0x0078049f1766f5ea41ff17d8e88499bcca46fd68
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.75
+  Ground Truth: sybil
+  Evidence:
+    - Shared funder with cluster
+    - High behavior similarity (Jaccard: 0.696)
+  Reasoning:    The wallet shares a common funder with the cluster and exhibits high behavioral similarity, which suggests potential Sybil activity, although it lacks an amount anomaly.
+
+0x00b7ddb0fa90ecd73ac4d4744b8f5da95f94c734
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shared funder with cluster
+    - Multi-hop funding indicates obfuscation attempt
+  Reasoning:    The wallet shares a common funder with the cluster and exhibits multi-hop funding, which raises suspicion. However, it does not meet the criteria for a higher risk classification due to the absence of amount anomalies and low behavior similarity.
+
+0x0140ba84fae7e93e30ce8e34866a3bc71d21367e
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shared funder with cluster
+    - Multi-hop funding indicates obfuscation attempt
+  Reasoning:    The wallet shares a common funder with the cluster and exhibits multi-hop funding, which raises suspicion, but does not meet the criteria for higher risk classifications.
+
+0x0149884c791c379b42a0b073fd4c59c863143a9e
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - shared funder
+    - low transaction count
+  Reasoning:    The wallet shares a funder with the cluster and has a relatively low transaction count, indicating potential risk for Sybil behavior.
+
+0x000240e384b0d758236f041d64648a6bf55bb7f1
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shared funder with cluster
+    - Low transaction count
+  Reasoning:    The wallet shares a common funder with the cluster and has a relatively low transaction count, which raises suspicion but does not meet the criteria for a higher risk classification.
+
+0x00035ab46994cda43f150b2be16bb7ca423171c7
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shares funder with cluster
+    - Higher transaction count
+    - Behavior similarity (Jaccard) is moderate
+  Reasoning:    This wallet shares a common funder and has a moderate behavior similarity, indicating potential collusion.
+
+0x00f1ee4a1302264ba25d7c94afa36e62c5c168c5
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shares funder with cluster
+    - Higher transaction count
+    - Behavior similarity (Jaccard) is moderate
+  Reasoning:    Similar to Wallet #2, this wallet shares a common funder and has a moderate behavior similarity, suggesting possible collusion.
+
+0x016677f3a6208c9b136040dc57f7ebc9bc9af7bc
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - shared funder
+    - single weak indicator
+  Reasoning:    The wallet shares a common funder with the cluster but does not exhibit strong indicators of a Sybil attack, such as identical behavior or amount anomalies.
+
+0x00357a0042d859f1204b7f24ef52791c1e24c9a5
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - shared funder
+    - low transaction count
+  Reasoning:    The wallet shares a common funder with the cluster and has a low transaction count, which raises suspicion but does not meet the criteria for a higher risk classification.
+
+0x00aa6ebb3544a4f76f0b3cd1007f7a87c9afbe0d
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shares funder with cluster
+    - Single weak indicator of behavior similarity
+  Reasoning:    The wallet shares a common funder with the cluster, which raises suspicion. However, it does not meet the criteria for a higher risk classification due to the lack of strong indicators such as identical behavior or significant transaction anomalies.
+
+Common funder detected across cluster: 0x33ceb27b39d2bb7d2e61f7564d3df29344020417
+
+Done!

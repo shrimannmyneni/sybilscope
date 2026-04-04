@@ -1,0 +1,156 @@
+
+  --- Cluster 1/3: funder=0x33ceb27b39d2bb... (7 wallets) ---
+    0x001d022975... => CONFIRMED_SYBIL (conf: 1.0) [actual: sybil]
+    0x00435cf222... => SUSPICIOUS (conf: 0.7) [actual: sybil]
+    0x0050beff94... => CONFIRMED_SYBIL (conf: 1.0) [actual: sybil]
+    0x0078049f17... => SUSPICIOUS (conf: 0.7) [actual: sybil]
+    0x00b7ddb0fa... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    0x0140ba84fa... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    0x0149884c79... => SUSPICIOUS (conf: 0.5) [actual: sybil]
+    Flagged 7/7 as sybil — continuing to next cluster...
+
+  --- Cluster 2/3: funder=0x80c67432656d59... (4 wallets) ---
+    0x000240e384... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    0x00035ab469... => SUSPICIOUS (conf: 0.7) [actual: sybil]
+    0x00f1ee4a13... => SUSPICIOUS (conf: 0.7) [actual: sybil]
+    0x016677f3a6... => SUSPICIOUS (conf: 0.65) [actual: sybil]
+    Flagged 4/4 as sybil — continuing to next cluster...
+
+  --- Cluster 3/3: funder=0xe592427a0aece9... (2 wallets) ---
+    0x00357a0042... => SUSPICIOUS (conf: 0.6) [actual: sybil]
+    0x00aa6ebb35... => LIKELY_SYBIL (conf: 0.7) [actual: sybil]
+    Flagged 2/2 as sybil — continuing to next cluster...
+
+=== Summary ===
+Clusters processed: 3/3
+Wallets classified: 13
+Flagged as Sybil: 13/13
+
+0x001d022975a75cefcac6857d99543811f068d9a9
+  AI Risk:      CONFIRMED_SYBIL
+  Confidence:   1.0
+  Ground Truth: sybil
+  Evidence:
+    - Low transaction count (2)
+    - Identical behavior similarity (1.000) with another wallet
+    - Shared first funder with all wallets in the cluster
+  Reasoning:    This wallet has a very low transaction count and exhibits identical behavior with another wallet, indicating it is likely part of a Sybil attack.
+
+0x00435cf222fba348a90e39e0b56d262edb8ec50d
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - High transaction count (46)
+    - Shared first funder with cluster
+    - High timing gap (1850713.5s) and high std dev
+  Reasoning:    While this wallet has a higher transaction count, the timing gap and shared funder raise suspicions of potential Sybil behavior.
+
+0x0050beff948011d00d60404d65c4deb40084fd25
+  AI Risk:      CONFIRMED_SYBIL
+  Confidence:   1.0
+  Ground Truth: sybil
+  Evidence:
+    - Low transaction count (2)
+    - Identical behavior similarity (1.000) with another wallet
+    - Shared first funder with all wallets in the cluster
+  Reasoning:    Similar to Wallet #1, this wallet has a low transaction count and identical behavior with another wallet, confirming it as part of a Sybil attack.
+
+0x0078049f1766f5ea41ff17d8e88499bcca46fd68
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - High transaction count (45)
+    - Shared first funder with cluster
+    - High timing gap (1879306.3s) and high std dev
+  Reasoning:    This wallet has a significant transaction count but shares characteristics with suspicious wallets, indicating potential Sybil behavior.
+
+0x00b7ddb0fa90ecd73ac4d4744b8f5da95f94c734
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.6
+  Ground Truth: sybil
+  Evidence:
+    - Moderate transaction count (57)
+    - Shared first funder with cluster
+    - Low behavior similarity (0.147) compared to others
+  Reasoning:    While this wallet has a higher transaction count, the low behavior similarity and shared funder suggest it may be involved in suspicious activity.
+
+0x0140ba84fae7e93e30ce8e34866a3bc71d21367e
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.5
+  Ground Truth: sybil
+  Evidence:
+    - Moderate transaction count (26)
+    - Shared first funder with cluster
+    - Low behavior similarity (0.333)
+  Reasoning:    This wallet's moderate transaction count and shared funder raise suspicions, but the behavior similarity is not high enough to confirm Sybil activity.
+
+0x0149884c791c379b42a0b073fd4c59c863143a9e
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.5
+  Ground Truth: sybil
+  Evidence:
+    - Low transaction count (10)
+    - Shared first funder with cluster
+    - Low behavior similarity (0.200)
+  Reasoning:    Despite a low transaction count and shared funder, the low behavior similarity makes it less likely to be a confirmed Sybil wallet, but still suspicious.
+
+0x000240e384b0d758236f041d64648a6bf55bb7f1
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.6
+  Ground Truth: sybil
+  Evidence:
+    - Shares first funder with cluster
+    - Low transaction count (16)
+  Reasoning:    While this wallet has a low transaction count and shares a funder with the cluster, it does not exhibit strong patterns of behavior similarity or regular timing gaps that would indicate a Sybil attack.
+
+0x00035ab46994cda43f150b2be16bb7ca423171c7
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shares first funder with cluster
+    - Moderate behavior similarity (0.212)
+  Reasoning:    This wallet has a higher transaction count but still shares a funder with the cluster. The behavior similarity is not high enough to indicate a clear Sybil attack, but the shared funder raises suspicion.
+
+0x00f1ee4a1302264ba25d7c94afa36e62c5c168c5
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - Shares first funder with cluster
+    - Moderate behavior similarity (0.212)
+  Reasoning:    Similar to Wallet #2, this wallet has a significant transaction count and shares a funder. The behavior similarity is not high enough to confirm a Sybil attack, but the shared funder is concerning.
+
+0x016677f3a6208c9b136040dc57f7ebc9bc9af7bc
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.65
+  Ground Truth: sybil
+  Evidence:
+    - Shares first funder with cluster
+    - Moderate transaction count (59)
+  Reasoning:    This wallet also shares a funder and has a moderate transaction count. The behavior similarity is low, which reduces the likelihood of a Sybil attack, but the shared funder remains a red flag.
+
+0x00357a0042d859f1204b7f24ef52791c1e24c9a5
+  AI Risk:      SUSPICIOUS
+  Confidence:   0.6
+  Ground Truth: sybil
+  Evidence:
+    - Low transaction count (5 transactions)
+    - Shares first funder with another wallet in the cluster
+  Reasoning:    While this wallet has a low transaction count and shares a funder with another wallet, it does not exhibit strong indicators of a Sybil attack due to its relatively higher average timing gap and lower behavior similarity.
+
+0x00aa6ebb3544a4f76f0b3cd1007f7a87c9afbe0d
+  AI Risk:      LIKELY_SYBIL
+  Confidence:   0.7
+  Ground Truth: sybil
+  Evidence:
+    - High transaction count (35 transactions)
+    - Shares first funder with another wallet in the cluster
+    - Very large average timing gap and high standard deviation
+  Reasoning:    This wallet has a significantly higher transaction count but also shares a funder with the other wallet. The extreme average timing gap and high standard deviation suggest irregular behavior, which raises suspicion of a Sybil attack.
+
+Common funder detected across cluster: 0x33ceb27b39d2bb7d2e61f7564d3df29344020417
+
+Done!

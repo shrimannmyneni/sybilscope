@@ -14,16 +14,16 @@ import from data_fetcher {
     compute_behavior_similarity,
     llm_classify_sybil,
     llm_classify_cluster,
+    llm_classify_cluster_enriched,
     get_cache_path,
     sample_and_find_root,
     build_funding_clusters,
     build_louvain_clusters,
     merge_clusters,
-    detect_chain
+    detect_chain,
+    detect_amount_anomaly,
+    build_funding_tree
 }
-import from data_fetcher { fetch_wallet_data }
-import from analyzers { compute_timing_stats, find_common_funder, compute_behavior_similarity }
-import from llm_classifier { llm_classify_sybil }
 import json;
 
 # ---- Data Types ----
@@ -240,17 +240,17 @@ with entry {
         print(f"    [{i + 1}] {c['funder'][:24]}... | {c['size']} wallet(s){source_tag}{marker}");
     }
 
-    # ---- Phase 4: BFS classify cluster-by-cluster ----
-    print("\nPhase 4: BFS classification from most suspicious cluster...");
+    # ---- Phase 4: BFS classify with agentic loop ----
+    print("\nPhase 4: BFS classification with agentic reasoning...");
     all_verdicts: list[dict] = [];
     clusters_processed = 0;
     wallets_skipped = 0;
+    MAX_AGENTIC_ROUNDS = 3;  # Iteration cap — prevent infinite expansion
 
     for i in range(len(clusters)) {
         cluster = clusters[i];
-        # Skip trivial clusters: tree size <= 2 (including root) and < 3 wallets
-        tree_length = cluster["size"] + 1;  # +1 for the root funder node
-        if tree_length <= 2 and cluster["size"] < 3 {
+        # Skip trivial clusters
+        if cluster["size"] < 2 {
             wallets_skipped += cluster["size"];
             print(f"\n  --- Cluster {i + 1}/{len(clusters)}: funder={cluster['funder'][:16]}... ({cluster['size']} wallets) — SKIPPED (too small) ---");
             continue;
@@ -269,18 +269,48 @@ with entry {
         }
         cluster_wallet_data = list(addr_to_data.values());
 
-        # Detect chain-like attacks — if chain height > 8, only analyze first/last 3
+        # ---- Compute ALL cluster-level signals ----
+
+        # 1. Chain detection
         chain_result = detect_chain(cluster_wallet_data);
+        if chain_result["is_chain"] {
+            print(f"    Chain pattern detected (height={chain_result['chain_height']})");
+        }
+
+        # 2. Amount anomaly detection
+        amount_result = detect_amount_anomaly(cluster_wallet_data);
+        if amount_result["is_anomaly"] {
+            print(f"    Amount anomaly: {amount_result['count']}/{amount_result['total_wallets']} wallets received ~{amount_result['dominant_amount']:.6f} ETH");
+        }
+
+        # 3. Multi-hop funding tree (from cluster funder)
+        tree_result = {"root": cluster["funder"], "path": [], "depth": 0, "fan_out": {}};
+        if cluster["funder"] and not cluster["funder"].startswith("louvain") {
+            tree_result = build_funding_tree(cluster["funder"], max_depth=3);
+            if tree_result["depth"] > 1 {
+                print(f"    Multi-hop funding: depth={tree_result['depth']}, root={tree_result['root'][:12]}...");
+            }
+        }
+
+        # 4. Common funder
+        common = find_common_funder(cluster_wallet_data);
+
+        cluster_signals = {
+            "chain": chain_result,
+            "amount_anomaly": amount_result,
+            "funding_tree": tree_result,
+            "common_funder": common if common else "",
+            "cluster_size": len(cluster_wallet_data)
+        };
+
+        # Chain trimming for long chains
         analyze_addrs = cluster["addresses"];
         chain_trimmed = 0;
         if chain_result["is_chain"] and chain_result["chain_height"] > 8 {
-            head_n = 3;
-            tail_n = 3;
             chain_order = chain_result["chain_order"];
             chain_height = chain_result["chain_height"];
-            head = chain_order[:head_n];
-            tail = chain_order[-tail_n:];
-            # Deduplicate in case chain is very short after trimming
+            head = chain_order[:3];
+            tail = chain_order[-3:];
             seen: set = set();
             analyze_addrs = [];
             for a in head + tail {
@@ -290,10 +320,10 @@ with entry {
                 }
             }
             chain_trimmed = chain_height - len(analyze_addrs);
-            print(f"    Chain detected (height={chain_height}) — analyzing first {head_n} + last {tail_n} nodes, skipping {chain_trimmed} middle nodes");
+            print(f"    Trimming chain: analyzing first 3 + last 3, skipping {chain_trimmed} middle nodes");
         }
 
-        # Build sub-graph for this cluster, pre-populating wallet data from Phase 2
+        # Build sub-graph for this cluster
         cluster_node = Cluster(funder=cluster["funder"], priority=i);
         root ++> cluster_node;
         analyze_set = set(analyze_addrs);
@@ -309,13 +339,16 @@ with entry {
                 label=wd.get("label", "unknown")
             );
         }
-        # Scope similarity data to analyzed wallets only
+
+        # Collect features via Walker
         analyze_wallet_data = [wd for wd in cluster_wallet_data if wd["address"] in analyze_set];
         judge = SybilJudge(wallet_data=all_wallet_data, cluster_data=analyze_wallet_data);
         cluster_node spawn judge;
 
-        # Batch-classify entire cluster in a single LLM call
-        batch_verdicts = llm_classify_cluster(judge.features);
+        # ---- Enriched LLM classification with all signals ----
+        print("    Classifying with enriched signals (timing + funding tree + chain + amount)...");
+        batch_verdicts = llm_classify_cluster_enriched(judge.features, cluster_signals);
+
         for idx in range(len(judge.features)) {
             v = batch_verdicts[idx];
             judge.verdicts.append({
@@ -328,11 +361,63 @@ with entry {
             });
             print(f"    {judge.features[idx]['address'][:12]}... => {v['risk']} (conf: {v['confidence']}) [actual: {judge.labels[idx]}]");
         }
+
+        # ---- AGENTIC LOOP: Low confidence → deeper investigation ----
+        agentic_round = 0;
+        low_conf_indices: list[int] = [];
+        for idx in range(len(judge.verdicts)) {
+            if judge.verdicts[idx]["confidence"] < 0.7 and judge.verdicts[idx]["risk"] != "CLEAN" {
+                low_conf_indices.append(idx);
+            }
+        }
+
+        while len(low_conf_indices) > 0 and agentic_round < MAX_AGENTIC_ROUNDS {
+            agentic_round += 1;
+            print(f"    [Agentic round {agentic_round}/{MAX_AGENTIC_ROUNDS}] {len(low_conf_indices)} wallets below confidence threshold — investigating deeper...");
+
+            # Re-classify low-confidence wallets with individual deep analysis
+            for idx in low_conf_indices {
+                addr = judge.verdicts[idx]["address"];
+                # Fetch deeper data — build individual funding tree
+                deep_tree = build_funding_tree(addr, max_depth=3);
+                deep_signals = {
+                    "chain": chain_result,
+                    "amount_anomaly": amount_result,
+                    "funding_tree": deep_tree,
+                    "common_funder": common if common else "",
+                    "cluster_size": len(cluster_wallet_data)
+                };
+
+                # Re-classify with deeper context
+                re_verdicts = llm_classify_cluster_enriched([judge.features[idx]], deep_signals);
+                if len(re_verdicts) > 0 {
+                    old_conf = judge.verdicts[idx]["confidence"];
+                    new_v = re_verdicts[0];
+                    judge.verdicts[idx]["risk"] = new_v["risk"];
+                    judge.verdicts[idx]["confidence"] = new_v["confidence"];
+                    judge.verdicts[idx]["evidence"] = new_v["evidence"];
+                    judge.verdicts[idx]["reasoning"] = new_v["reasoning"];
+                    print(f"      {addr[:12]}... re-classified: {new_v['risk']} (conf: {old_conf} -> {new_v['confidence']})");
+                }
+            }
+
+            # Check if there are still low-confidence verdicts
+            low_conf_indices = [];
+            for idx in range(len(judge.verdicts)) {
+                if judge.verdicts[idx]["confidence"] < 0.7 and judge.verdicts[idx]["risk"] != "CLEAN" {
+                    low_conf_indices.append(idx);
+                }
+            }
+        }
+
+        if agentic_round > 0 {
+            print(f"    Agentic loop completed after {agentic_round} round(s)");
+        }
+
         all_verdicts += judge.verdicts;
         wallets_skipped += chain_trimmed;
 
         # Early stopping: if this cluster is all CLEAN, skip remaining
-        # (they have fewer shared funders = less suspicious)
         sybil_in_cluster = 0;
         for v in judge.verdicts {
             if v["risk"] != "CLEAN" {

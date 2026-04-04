@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SybilScope</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0f; color: #f0efe8; overflow: hidden; }
+.app { display: grid; grid-template-rows: auto auto 1fr; height: 100vh; }
+
+/* Top bar */
+.topbar { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 0.5px solid #222; }
+.logo { font-size: 14px; font-weight: 500; color: #f0efe8; letter-spacing: 1px; }
+.logo span { color: #E24B4A; }
+.subtitle { font-size: 11px; color: #444; letter-spacing: 1px; }
+.stats { display: flex; gap: 8px; margin-left: auto; }
+.stat { background: #141418; border: 0.5px solid #222; border-radius: 8px; padding: 6px 14px; text-align: center; min-width: 70px; }
+.stat-n { font-size: 18px; font-weight: 500; color: #f0efe8; }
+.stat-n.red { color: #E24B4A; }
+.stat-n.green { color: #1D9E75; }
+.stat-n.amber { color: #EF9F27; }
+.stat-l { font-size: 10px; color: #666; letter-spacing: 0.5px; margin-top: 1px; }
+
+/* Input bar */
+.input-bar { padding: 12px 20px; background: #0d0d12; border-bottom: 0.5px solid #222; display: flex; gap: 10px; align-items: flex-start; }
+.addr-input { flex: 1; background: #141418; border: 0.5px solid #333; border-radius: 8px; padding: 8px 12px; color: #f0efe8; font-size: 12px; font-family: monospace; resize: none; height: 64px; line-height: 1.6; outline: none; }
+.addr-input:focus { border-color: #E24B4A; }
+.analyze-btn { background: #E24B4A; color: #fff; border: none; border-radius: 8px; padding: 0 20px; font-size: 13px; font-weight: 500; cursor: pointer; height: 64px; white-space: nowrap; transition: background 0.2s; }
+.analyze-btn:hover { background: #c93c3b; }
+.analyze-btn:disabled { background: #444; cursor: not-allowed; }
+.analyze-btn.loading { background: #444; }
+
+/* Main content */
+.main { display: grid; grid-template-columns: 1fr 320px; overflow: hidden; }
+
+/* Graph area */
+.graph-area { position: relative; background: #080810; border-right: 0.5px solid #1a1a22; overflow: hidden; }
+.graph-label { position: absolute; top: 14px; left: 16px; font-size: 11px; color: #444; letter-spacing: 1px; z-index: 2; }
+.graph-legend { position: absolute; bottom: 14px; left: 16px; display: flex; gap: 14px; z-index: 2; }
+.leg { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #666; }
+.leg-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Right panel */
+.panel { background: #0d0d12; overflow-y: auto; }
+.panel-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: #333; font-size: 13px; }
+.panel-section { padding: 16px; border-bottom: 0.5px solid #1a1a22; }
+.panel-title { font-size: 10px; color: #444; letter-spacing: 1px; margin-bottom: 10px; }
+
+/* Verdict badge */
+.verdict-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; }
+.verdict-badge.sybil { background: #1a0808; border: 0.5px solid #E24B4A; }
+.verdict-badge.clean { background: #081a0a; border: 0.5px solid #1D9E75; }
+.verdict-dot { width: 8px; height: 8px; border-radius: 50%; }
+.verdict-text { font-size: 13px; font-weight: 500; }
+
+/* Confidence bar */
+.conf-bar-wrap { margin-bottom: 12px; }
+.conf-label { display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-bottom: 5px; }
+.conf-val { color: #f0efe8; font-weight: 500; }
+.conf-bar { height: 4px; background: #1a1a22; border-radius: 2px; }
+.conf-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+
+/* Evidence */
+.evidence-list { display: flex; flex-direction: column; gap: 6px; }
+.ev-item { display: flex; gap: 8px; align-items: flex-start; }
+.ev-bullet { width: 4px; height: 4px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+.ev-text { font-size: 12px; color: #aaa; line-height: 1.5; }
+
+/* Cluster stats */
+.cluster-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cs { background: #141418; border-radius: 6px; padding: 10px; }
+.cs-n { font-size: 18px; font-weight: 500; color: #f0efe8; }
+.cs-l { font-size: 10px; color: #555; margin-top: 2px; }
+
+/* Address list */
+.addr-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.addr-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 4px; background: #141418; cursor: pointer; transition: background 0.15s; }
+.addr-row:hover { background: #1a1a22; }
+.addr-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.addr-hash { font-size: 11px; font-family: monospace; color: #888; }
+.addr-tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-left: auto; }
+.tag-sybil { background: #1a0808; color: #E24B4A; }
+.tag-clean { background: #0a1a0a; color: #1D9E75; }
+.tag-suspicious { background: #1a1508; color: #EF9F27; }
+
+/* Reasoning */
+.reasoning { font-size: 12px; color: #666; line-height: 1.5; font-style: italic; }
+
+/* Tooltip */
+.tooltip { position: absolute; background: #1a1a22; border: 0.5px solid #333; border-radius: 6px; padding: 8px 12px; font-size: 11px; font-family: monospace; color: #aaa; pointer-events: none; z-index: 10; opacity: 0; transition: opacity 0.15s; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="topbar">
+    <div class="logo"><span>Sybil</span>Scope</div>
+    <div class="subtitle">REAL-TIME SYBIL DETECTOR</div>
+    <div class="stats">
+      <div class="stat"><div class="stat-n" id="stat-scanned">0</div><div class="stat-l">SCANNED</div></div>
+      <div class="stat"><div class="stat-n red" id="stat-flagged">0</div><div class="stat-l">FLAGGED</div></div>
+      <div class="stat"><div class="stat-n" id="stat-clusters">0</div><div class="stat-l">CLUSTERS</div></div>
+      <div class="stat"><div class="stat-n amber" id="stat-protected">$0</div><div class="stat-l">PROTECTED</div></div>
+    </div>
+  </div>
+
+  <div class="input-bar">
+    <textarea class="addr-input" id="addr-input" placeholder="Paste wallet addresses here, one per line&#10;0x001d022975a75cefcac6857d99543811f068d9a9&#10;0x00435cf222fba348a90e39e0b56d262edb8ec50d&#10;..."></textarea>
+    <button class="analyze-btn" id="analyze-btn" onclick="runAnalysis()">Analyze</button>
+  </div>
+
+  <div class="main">
+    <div class="graph-area" id="graph-area">
+      <div class="graph-label">WALLET GRAPH</div>
+      <div class="graph-legend">
+        <div class="leg"><div class="leg-dot" style="background:#E24B4A"></div>Sybil wallet</div>
+        <div class="leg"><div class="leg-dot" style="background:#EF9F27"></div>Suspicious</div>
+        <div class="leg"><div class="leg-dot" style="background:#1D9E75"></div>Legitimate</div>
+      </div>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+
+    <div class="panel" id="panel">
+      <div class="panel-empty">Click a cluster or run analysis</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  Demo data from actual SybilScope run
+// ============================================================
+const DEMO_DATA = {
+  nodes: [
+    // Cluster 1 — funder: 0x33ceb27b...
+    { id: "0x001d022975a75cefcac6857d99543811f068d9a9", is_sybil: true, risk: "CONFIRMED_SYBIL", confidence: 1.0, cluster_id: 1, tx_count: 2, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["Low transaction count (2)", "Identical behavior similarity (1.000)", "Shared first funder with all wallets in cluster"], reasoning: "Very low tx count and identical behavior — part of Sybil attack." },
+    { id: "0x00435cf222fba348a90e39e0b56d262edb8ec50d", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.7, cluster_id: 1, tx_count: 46, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["High tx count but irregular timing", "Shares first funder with cluster", "Moderate behavior similarity (0.696)"], reasoning: "Higher tx count but shared funder raises suspicions." },
+    { id: "0x0050beff948011d00d60404d65c4deb40084fd25", is_sybil: true, risk: "CONFIRMED_SYBIL", confidence: 1.0, cluster_id: 1, tx_count: 2, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["Low transaction count (2)", "Identical behavior similarity (1.000)", "Shared first funder"], reasoning: "Very low tx count and identical behavior." },
+    { id: "0x0078049f1766f5ea41ff17d8e88499bcca46fd68", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.7, cluster_id: 1, tx_count: 45, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["Irregular timing gaps", "Shared funder", "Moderate similarity (0.696)"], reasoning: "Shared funder raises suspicion." },
+    { id: "0x00b7ddb0fa90ecd73ac4d4744b8f5da95f94c734", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.6, cluster_id: 1, tx_count: 57, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["Moderate tx count", "Shared funder", "Low similarity (0.147)"], reasoning: "Moderate tx count but shared funder." },
+    { id: "0x0140ba84fae7e93e30ce8e34866a3bc71d21367e", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.5, cluster_id: 1, tx_count: 26, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["Moderate tx count", "Shared funder", "Low similarity (0.333)"], reasoning: "Suspicious but inconclusive." },
+    { id: "0x0149884c791c379b42a0b073fd4c59c863143a9e", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.5, cluster_id: 1, tx_count: 10, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", evidence: ["Low tx count (10)", "Shared funder", "Low similarity (0.200)"], reasoning: "Low tx count and shared funder." },
+    // Cluster 1 funder node
+    { id: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", is_sybil: true, risk: "HUB", confidence: 1.0, cluster_id: 1, tx_count: 0, funder: "", evidence: ["Root funder for 7 wallets"], reasoning: "Master wallet funding Sybil cluster.", is_hub: true },
+
+    // Cluster 2 — funder: 0x80c67432...
+    { id: "0x000240e384b0d758236f041d64648a6bf55bb7f1", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.6, cluster_id: 2, tx_count: 16, funder: "0x80c67432656d59144ceff962e8faf8926599bcf8", evidence: ["Shared funder", "Low tx count (16)", "Low similarity (0.087)"], reasoning: "Shared funder but low similarity." },
+    { id: "0x00035ab46994cda43f150b2be16bb7ca423171c7", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.7, cluster_id: 2, tx_count: 80, funder: "0x80c67432656d59144ceff962e8faf8926599bcf8", evidence: ["Shared funder", "Moderate tx count (80)", "Low similarity (0.212)"], reasoning: "Shared funder with moderate activity." },
+    { id: "0x00f1ee4a1302264ba25d7c94afa36e62c5c168c5", is_sybil: true, risk: "LIKELY_SYBIL", confidence: 0.8, cluster_id: 2, tx_count: 228, funder: "0x80c67432656d59144ceff962e8faf8926599bcf8", evidence: ["Shared funder", "High tx count (228)", "20 protocol interactions"], reasoning: "Despite high tx count, shared funder pattern is strong." },
+    { id: "0x016677f3a6208c9b136040dc57f7ebc9bc9af7bc", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.65, cluster_id: 2, tx_count: 59, funder: "0x80c67432656d59144ceff962e8faf8926599bcf8", evidence: ["Shared funder", "Moderate tx count (59)", "Low similarity (0.143)"], reasoning: "Shared funder indicates possible Sybil." },
+    { id: "0x80c67432656d59144ceff962e8faf8926599bcf8", is_sybil: true, risk: "HUB", confidence: 1.0, cluster_id: 2, tx_count: 0, funder: "", evidence: ["Root funder for 4 wallets"], reasoning: "Master wallet funding cluster.", is_hub: true },
+
+    // Cluster 3 — funder: 0xe592427a...
+    { id: "0x00357a0042d859f1204b7f24ef52791c1e24c9a5", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.7, cluster_id: 3, tx_count: 5, funder: "0xe592427a0aece92de3edee1f18e0157c05861564", evidence: ["Low tx count (5)", "Shared funder", "Low similarity (0.222)"], reasoning: "Low activity and shared funder." },
+    { id: "0x00aa6ebb3544a4f76f0b3cd1007f7a87c9afbe0d", is_sybil: true, risk: "SUSPICIOUS", confidence: 0.8, cluster_id: 3, tx_count: 35, funder: "0xe592427a0aece92de3edee1f18e0157c05861564", evidence: ["Shared funder", "Unusual timing patterns", "Low similarity (0.222)"], reasoning: "Unusual timing and shared funder." },
+    { id: "0xe592427a0aece92de3edee1f18e0157c05861564", is_sybil: true, risk: "HUB", confidence: 1.0, cluster_id: 3, tx_count: 0, funder: "", evidence: ["Root funder for 2 wallets"], reasoning: "Master wallet.", is_hub: true },
+  ],
+  edges: [
+    // Cluster 1 edges (hub-spoke)
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x001d022975a75cefcac6857d99543811f068d9a9" },
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x00435cf222fba348a90e39e0b56d262edb8ec50d" },
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x0050beff948011d00d60404d65c4deb40084fd25" },
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x0078049f1766f5ea41ff17d8e88499bcca46fd68" },
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x00b7ddb0fa90ecd73ac4d4744b8f5da95f94c734" },
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x0140ba84fae7e93e30ce8e34866a3bc71d21367e" },
+    { source: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", target: "0x0149884c791c379b42a0b073fd4c59c863143a9e" },
+    // Cluster 2 edges
+    { source: "0x80c67432656d59144ceff962e8faf8926599bcf8", target: "0x000240e384b0d758236f041d64648a6bf55bb7f1" },
+    { source: "0x80c67432656d59144ceff962e8faf8926599bcf8", target: "0x00035ab46994cda43f150b2be16bb7ca423171c7" },
+    { source: "0x80c67432656d59144ceff962e8faf8926599bcf8", target: "0x00f1ee4a1302264ba25d7c94afa36e62c5c168c5" },
+    { source: "0x80c67432656d59144ceff962e8faf8926599bcf8", target: "0x016677f3a6208c9b136040dc57f7ebc9bc9af7bc" },
+    // Cluster 3 edges
+    { source: "0xe592427a0aece92de3edee1f18e0157c05861564", target: "0x00357a0042d859f1204b7f24ef52791c1e24c9a5" },
+    { source: "0xe592427a0aece92de3edee1f18e0157c05861564", target: "0x00aa6ebb3544a4f76f0b3cd1007f7a87c9afbe0d" },
+  ],
+  clusters: [
+    { id: 1, funder: "0x33ceb27b39d2bb7d2e61f7564d3df29344020417", is_sybil: true, confidence: 0.72, wallet_count: 7, stolen_usd: 182000, avg_similarity: 0.5, evidence: ["All wallets share the same funder 0x33ce...0417", "2 wallets with identical behavior (similarity 1.0)", "Multiple wallets with very low tx count (2-10)", "Cluster of 7 wallets funded by single entity"] },
+    { id: 2, funder: "0x80c67432656d59144ceff962e8faf8926599bcf8", is_sybil: true, confidence: 0.69, wallet_count: 4, stolen_usd: 104000, avg_similarity: 0.21, evidence: ["All wallets share funder 0x80c6...bcf8", "Mixed tx counts (16-228) but common origin", "Low pairwise similarity suggests some obfuscation"], reasoning: "" },
+    { id: 3, funder: "0xe592427a0aece92de3edee1f18e0157c05861564", is_sybil: true, confidence: 0.75, wallet_count: 2, stolen_usd: 52000, avg_similarity: 0.22, evidence: ["Both wallets funded by 0xe592...1564", "Unusual timing patterns in larger wallet", "Low tx count in smaller wallet (5 txs)"] },
+  ]
+};
+
+// ============================================================
+//  State
+// ============================================================
+let currentData = null;
+let selectedCluster = null;
+let simulation = null;
+
+// ============================================================
+//  Graph rendering
+// ============================================================
+function nodeColor(d) {
+  if (d.is_hub) return "#fff";
+  if (d.risk === "CONFIRMED_SYBIL") return "#E24B4A";
+  if (d.risk === "LIKELY_SYBIL") return "#E24B4A";
+  if (d.risk === "SUSPICIOUS") return "#EF9F27";
+  return "#1D9E75";
+}
+
+function nodeRadius(d) {
+  if (d.is_hub) return 10;
+  if (d.risk === "CONFIRMED_SYBIL") return 7;
+  return 5;
+}
+
+function renderGraph(data) {
+  const container = document.getElementById("graph-area");
+  d3.select("#graph-svg").remove();
+
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  const svg = d3.select(container)
+    .append("svg")
+    .attr("id", "graph-svg")
+    .attr("width", width)
+    .attr("height", height)
+    .style("position", "absolute")
+    .style("top", 0)
+    .style("left", 0);
+
+  // Glow filters
+  const defs = svg.append("defs");
+  const glowRed = defs.append("filter").attr("id", "glow-red-f").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+  glowRed.append("feGaussianBlur").attr("stdDeviation", "4").attr("result", "blur");
+  glowRed.append("feMerge").selectAll("feMergeNode").data(["blur", "SourceGraphic"]).enter().append("feMergeNode").attr("in", d => d);
+
+  const nodes = data.nodes.map(d => ({...d}));
+  const edges = data.edges.map(d => ({...d}));
+
+  // Cluster-based positioning
+  const clusterCenters = {};
+  const clusterIds = [...new Set(nodes.map(n => n.cluster_id))];
+  const cx = width / 2, cy = height / 2;
+  clusterIds.forEach((cid, i) => {
+    const angle = (2 * Math.PI * i) / clusterIds.length - Math.PI / 2;
+    const radius = Math.min(width, height) * 0.25;
+    clusterCenters[cid] = { x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius };
+  });
+
+  nodes.forEach(n => {
+    const center = clusterCenters[n.cluster_id] || { x: cx, y: cy };
+    n.x = center.x + (Math.random() - 0.5) * 80;
+    n.y = center.y + (Math.random() - 0.5) * 80;
+  });
+
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(edges).id(d => d.id).distance(50).strength(0.8))
+    .force("charge", d3.forceManyBody().strength(-120))
+    .force("center", d3.forceCenter(cx, cy))
+    .force("collision", d3.forceCollide().radius(d => nodeRadius(d) + 3))
+    .force("cluster", alpha => {
+      nodes.forEach(n => {
+        const center = clusterCenters[n.cluster_id];
+        if (center) {
+          n.vx += (center.x - n.x) * alpha * 0.1;
+          n.vy += (center.y - n.y) * alpha * 0.1;
+        }
+      });
+    });
+
+  // Edges
+  const link = svg.append("g")
+    .selectAll("line")
+    .data(edges)
+    .enter().append("line")
+    .attr("stroke", d => {
+      const src = nodes.find(n => n.id === (d.source.id || d.source));
+      return src && src.is_sybil ? "#E24B4A" : "#1D9E75";
+    })
+    .attr("stroke-width", 0.8)
+    .attr("stroke-opacity", 0.3);
+
+  // Glow circles behind hubs
+  const glow = svg.append("g")
+    .selectAll("circle")
+    .data(nodes.filter(n => n.is_hub))
+    .enter().append("circle")
+    .attr("r", 30)
+    .attr("fill", "#E24B4A")
+    .attr("opacity", 0.08);
+
+  // Nodes
+  const node = svg.append("g")
+    .selectAll("circle")
+    .data(nodes)
+    .enter().append("circle")
+    .attr("r", d => nodeRadius(d))
+    .attr("fill", d => nodeColor(d))
+    .attr("opacity", d => d.is_hub ? 0.95 : 0.8)
+    .attr("stroke", d => selectedCluster === d.cluster_id ? "#fff" : "none")
+    .attr("stroke-width", 1.5)
+    .style("cursor", "pointer")
+    .on("click", (event, d) => {
+      selectedCluster = d.cluster_id;
+      showClusterPanel(d.cluster_id);
+      node.attr("stroke", n => n.cluster_id === d.cluster_id ? "#fff" : "none");
+    })
+    .on("mouseenter", (event, d) => {
+      const tooltip = document.getElementById("tooltip");
+      tooltip.textContent = d.id.slice(0, 10) + "..." + d.id.slice(-4) + (d.is_hub ? " (hub)" : "");
+      tooltip.style.opacity = 1;
+      tooltip.style.left = (event.offsetX + 12) + "px";
+      tooltip.style.top = (event.offsetY - 10) + "px";
+    })
+    .on("mouseleave", () => {
+      document.getElementById("tooltip").style.opacity = 0;
+    })
+    .call(d3.drag()
+      .on("start", (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (event, d) => { d.fx = event.x; d.fy = event.y; })
+      .on("end", (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+    );
+
+  // Cluster labels
+  const clusterLabels = svg.append("g")
+    .selectAll("text")
+    .data(clusterIds)
+    .enter().append("text")
+    .attr("text-anchor", "middle")
+    .attr("font-size", 10)
+    .attr("fill", "#E24B4A")
+    .attr("opacity", 0.7)
+    .text(cid => {
+      const cl = data.clusters.find(c => c.id === cid);
+      return cl ? `cluster ${cid} \u00B7 ${cl.wallet_count} wallets` : "";
+    });
+
+  simulation.on("tick", () => {
+    link
+      .attr("x1", d => d.source.x)
+      .attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x)
+      .attr("y2", d => d.target.y);
+    node.attr("cx", d => d.x).attr("cy", d => d.y);
+    glow.attr("cx", d => d.x).attr("cy", d => d.y);
+    clusterLabels.each(function(cid) {
+      const clusterNodes = nodes.filter(n => n.cluster_id === cid);
+      const avgY = d3.max(clusterNodes, n => n.y) + 22;
+      const avgX = d3.mean(clusterNodes, n => n.x);
+      d3.select(this).attr("x", avgX).attr("y", avgY);
+    });
+  });
+}
+
+// ============================================================
+//  Panel rendering
+// ============================================================
+function showClusterPanel(clusterId) {
+  if (!currentData) return;
+  const cluster = currentData.clusters.find(c => c.id === clusterId);
+  if (!cluster) return;
+
+  const clusterNodes = currentData.nodes.filter(n => n.cluster_id === clusterId && !n.is_hub);
+  const confidencePct = Math.round(cluster.confidence * 100);
+  const isSybil = cluster.is_sybil;
+  const color = isSybil ? "#E24B4A" : "#1D9E75";
+
+  let html = `
+    <div class="panel-section">
+      <div class="panel-title">AI VERDICT \u00B7 CLUSTER ${clusterId}</div>
+      <div class="verdict-badge ${isSybil ? 'sybil' : 'clean'}">
+        <div class="verdict-dot" style="background:${color}"></div>
+        <div class="verdict-text" style="color:${color}">${isSybil ? 'Sybil detected' : 'Legitimate'}</div>
+      </div>
+      <div class="conf-bar-wrap">
+        <div class="conf-label"><span>Confidence</span><span class="conf-val">${confidencePct}%</span></div>
+        <div class="conf-bar"><div class="conf-fill" style="width:${confidencePct}%;background:${color}"></div></div>
+      </div>
+      <div class="evidence-list">
+        ${cluster.evidence.map(e => `
+          <div class="ev-item">
+            <div class="ev-bullet" style="background:${color}"></div>
+            <div class="ev-text">${e}</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">CLUSTER STATS</div>
+      <div class="cluster-stats">
+        <div class="cs"><div class="cs-n" style="color:${color}">${cluster.wallet_count}</div><div class="cs-l">Wallets in cluster</div></div>
+        <div class="cs"><div class="cs-n" style="color:#EF9F27">$${(cluster.stolen_usd / 1000).toFixed(0)}K</div><div class="cs-l">Tokens flagged</div></div>
+        <div class="cs"><div class="cs-n">${(cluster.avg_similarity * 100).toFixed(0)}%</div><div class="cs-l">Avg similarity</div></div>
+        <div class="cs"><div class="cs-n">${cluster.funder.slice(0,6)}...</div><div class="cs-l">Root funder</div></div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">ADDRESSES</div>
+      <div class="addr-list">
+        ${clusterNodes.map(n => {
+          const tagClass = n.risk === "CONFIRMED_SYBIL" || n.risk === "LIKELY_SYBIL" ? "tag-sybil" : n.risk === "SUSPICIOUS" ? "tag-suspicious" : "tag-clean";
+          const tagText = n.risk === "CONFIRMED_SYBIL" ? "Sybil" : n.risk === "LIKELY_SYBIL" ? "Likely" : n.risk === "SUSPICIOUS" ? "Suspicious" : "Clean";
+          const dotColor = n.risk === "CONFIRMED_SYBIL" || n.risk === "LIKELY_SYBIL" ? "#E24B4A" : n.risk === "SUSPICIOUS" ? "#EF9F27" : "#1D9E75";
+          return `<div class="addr-row" onclick="showWalletDetail('${n.id}')">
+            <div class="addr-dot" style="background:${dotColor}"></div>
+            <div class="addr-hash">${n.id.slice(0,6)}...${n.id.slice(-4)}</div>
+            <span class="addr-tag ${tagClass}">${tagText}</span>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
+
+  document.getElementById("panel").innerHTML = html;
+}
+
+function showWalletDetail(walletId) {
+  if (!currentData) return;
+  const node = currentData.nodes.find(n => n.id === walletId);
+  if (!node) return;
+
+  const color = node.risk === "CONFIRMED_SYBIL" || node.risk === "LIKELY_SYBIL" ? "#E24B4A" : node.risk === "SUSPICIOUS" ? "#EF9F27" : "#1D9E75";
+  const confidencePct = Math.round(node.confidence * 100);
+
+  let html = `
+    <div class="panel-section">
+      <div class="panel-title">WALLET DETAIL</div>
+      <div style="font-family:monospace;font-size:11px;color:#888;margin-bottom:10px;word-break:break-all">${node.id}</div>
+      <div class="verdict-badge ${node.is_sybil ? 'sybil' : 'clean'}">
+        <div class="verdict-dot" style="background:${color}"></div>
+        <div class="verdict-text" style="color:${color}">${node.risk.replace("_", " ")}</div>
+      </div>
+      <div class="conf-bar-wrap">
+        <div class="conf-label"><span>Confidence</span><span class="conf-val">${confidencePct}%</span></div>
+        <div class="conf-bar"><div class="conf-fill" style="width:${confidencePct}%;background:${color}"></div></div>
+      </div>
+      <div class="evidence-list">
+        ${node.evidence.map(e => `
+          <div class="ev-item">
+            <div class="ev-bullet" style="background:${color}"></div>
+            <div class="ev-text">${e}</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-title">DETAILS</div>
+      <div class="cluster-stats">
+        <div class="cs"><div class="cs-n">${node.tx_count}</div><div class="cs-l">Transactions</div></div>
+        <div class="cs"><div class="cs-n">${node.cluster_id}</div><div class="cs-l">Cluster</div></div>
+      </div>
+      <div style="margin-top:12px" class="reasoning">"${node.reasoning}"</div>
+    </div>
+    <div class="panel-section">
+      <div style="font-size:11px;color:#444;cursor:pointer" onclick="showClusterPanel(${node.cluster_id})">&larr; Back to Cluster ${node.cluster_id}</div>
+    </div>
+  `;
+
+  document.getElementById("panel").innerHTML = html;
+}
+
+// ============================================================
+//  Stats
+// ============================================================
+function updateStats(data) {
+  const totalNodes = data.nodes.filter(n => !n.is_hub).length;
+  const flagged = data.nodes.filter(n => n.is_sybil && !n.is_hub).length;
+  const totalUsd = data.clusters.reduce((sum, c) => sum + c.stolen_usd, 0);
+
+  document.getElementById("stat-scanned").textContent = totalNodes;
+  document.getElementById("stat-flagged").textContent = flagged;
+  document.getElementById("stat-clusters").textContent = data.clusters.length;
+  document.getElementById("stat-protected").textContent = "$" + (totalUsd / 1000).toFixed(0) + "K";
+}
+
+// ============================================================
+//  Analysis (demo mode — hardcoded data)
+// ============================================================
+async function runAnalysis() {
+  const btn = document.getElementById("analyze-btn");
+  const input = document.getElementById("addr-input").value.trim();
+
+  // Parse addresses from input
+  let addresses = input.split(/[\n,]+/).map(a => a.trim()).filter(a => a.startsWith("0x") && a.length >= 10);
+
+  btn.disabled = true;
+  btn.classList.add("loading");
+  btn.textContent = "Analyzing...";
+  document.getElementById("graph-area").querySelector(".graph-label").textContent = "WALLET GRAPH \u00B7 ANALYZING...";
+  document.getElementById("panel").innerHTML = '<div class="panel-empty">Running analysis...</div>';
+
+  // If no addresses pasted, use demo data as fallback
+  if (addresses.length === 0) {
+    setTimeout(() => {
+      currentData = DEMO_DATA;
+      renderGraph(currentData);
+      updateStats(currentData);
+      showClusterPanel(1);
+      btn.disabled = false;
+      btn.classList.remove("loading");
+      btn.textContent = "Analyze";
+      document.getElementById("graph-area").querySelector(".graph-label").textContent = "WALLET GRAPH \u00B7 LIVE";
+    }, 800);
+    return;
+  }
+
+  try {
+    const API_URL = window.location.origin + "/analyze";
+    const resp = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addresses }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.error || "Server error");
+    }
+
+    const data = await resp.json();
+    currentData = data;
+    renderGraph(data);
+    updateStats(data);
+    if (data.clusters.length > 0) {
+      showClusterPanel(data.clusters[0].id);
+    }
+    document.getElementById("graph-area").querySelector(".graph-label").textContent = "WALLET GRAPH \u00B7 LIVE";
+  } catch (err) {
+    console.error("Analysis failed:", err);
+    document.getElementById("panel").innerHTML = `<div class="panel-empty" style="color:#E24B4A">Error: ${err.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove("loading");
+    btn.textContent = "Analyze";
+  }
+}
+
+// ============================================================
+//  Init — auto-run with demo data
+// ============================================================
+window.addEventListener("load", () => {
+  currentData = DEMO_DATA;
+  renderGraph(currentData);
+  updateStats(currentData);
+  showClusterPanel(1);
+});
+
+window.addEventListener("resize", () => {
+  if (currentData) renderGraph(currentData);
+});
+</script>
+
+</body>
+</html>

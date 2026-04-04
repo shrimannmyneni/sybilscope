@@ -406,6 +406,277 @@ def detect_chain(cluster_wallet_data: list[dict]) -> dict:
     return {"is_chain": is_chain, "chain_order": best_chain, "chain_height": chain_height}
 
 
+def build_funding_tree(address: str, max_depth: int = 3) -> dict:
+    """Trace multi-hop funding tree upward from a wallet.
+
+    Follows first_funder links up to max_depth hops to find the root funder.
+    Returns {"root": str, "path": [str], "depth": int, "fan_out": dict}.
+    fan_out maps each funder to how many wallets it funded (from cache).
+    """
+    path = [address.lower()]
+    visited = {address.lower()}
+    current = address
+
+    for _ in range(max_depth):
+        data = fetch_wallet_data(current)
+        funder = data.get("first_funder", "").lower()
+        if not funder or funder in visited:
+            break
+        path.append(funder)
+        visited.add(funder)
+        current = funder
+
+    # Compute fan-out at each level
+    fan_out: dict[str, int] = {}
+    cache = _load_cache()
+    for node_addr in path[1:]:  # skip the leaf, check funders
+        count = 0
+        for cached_addr, entry in cache.items():
+            txs = entry.get("transactions", {}).get("result", [])
+            if isinstance(txs, list):
+                for tx in txs:
+                    if tx.get("from", "").lower() == node_addr and tx.get("to", "").lower() != node_addr:
+                        count += 1
+                        break
+        fan_out[node_addr] = count
+
+    return {
+        "root": path[-1] if len(path) > 1 else address.lower(),
+        "path": path,
+        "depth": len(path) - 1,
+        "fan_out": fan_out,
+    }
+
+
+def detect_amount_anomaly(cluster_wallet_data: list[dict]) -> dict:
+    """Detect statistically impossible amount patterns across a cluster.
+
+    Looks at incoming ETH amounts — if many wallets received very similar amounts
+    from the same funder, it's a strong Sybil signal (e.g., 2997 wallets all
+    getting 0.00114-0.00116 ETH).
+
+    Returns {"is_anomaly": bool, "dominant_amount": float, "count": int,
+             "total_wallets": int, "spread": float}.
+    """
+    if len(cluster_wallet_data) < 2:
+        return {"is_anomaly": False, "dominant_amount": 0.0, "count": 0,
+                "total_wallets": len(cluster_wallet_data), "spread": 0.0}
+
+    # Collect first incoming amounts (in ETH)
+    amounts: list[float] = []
+    for wd in cluster_wallet_data:
+        txs = wd.get("transactions", [])
+        addr = wd["address"].lower()
+        for tx in txs:
+            if tx.get("to", "").lower() == addr:
+                val = float(tx.get("value", "0")) / 1e18
+                if val > 0:
+                    amounts.append(val)
+                    break
+
+    if len(amounts) < 2:
+        return {"is_anomaly": False, "dominant_amount": 0.0, "count": 0,
+                "total_wallets": len(cluster_wallet_data), "spread": 0.0}
+
+    # Bucket amounts by rounding to 4 decimal places
+    buckets: dict[float, int] = {}
+    for a in amounts:
+        key = round(a, 4)
+        buckets[key] = buckets.get(key, 0) + 1
+
+    # Find the most common amount
+    dominant = max(buckets, key=buckets.get)  # type: ignore
+    count = buckets[dominant]
+
+    # Also check for very tight spread (within 5% of each other)
+    if amounts:
+        mean_amt = sum(amounts) / len(amounts)
+        if mean_amt > 0:
+            spread = max(abs(a - mean_amt) / mean_amt for a in amounts)
+        else:
+            spread = 0.0
+    else:
+        spread = 0.0
+
+    # Anomaly if >50% of wallets got the same amount, or spread < 5%
+    is_anomaly = (count >= len(amounts) * 0.5) or (spread < 0.05 and len(amounts) >= 3)
+
+    return {
+        "is_anomaly": is_anomaly,
+        "dominant_amount": dominant,
+        "count": count,
+        "total_wallets": len(cluster_wallet_data),
+        "spread": round(spread, 4),
+    }
+
+
+def llm_classify_cluster_enriched(
+    wallet_features: list[dict],
+    cluster_signals: dict,
+) -> list[dict]:
+    """Classify cluster with ALL signals — timing, funding tree, chain, amount anomaly.
+
+    cluster_signals: {
+        "chain": detect_chain() result,
+        "amount_anomaly": detect_amount_anomaly() result,
+        "funding_tree": build_funding_tree() result for root,
+        "common_funder": str or None,
+        "cluster_size": int,
+    }
+    """
+    from openai import OpenAI
+
+    if not wallet_features:
+        return []
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    # Build wallet blocks
+    wallet_blocks = []
+    for i, wf in enumerate(wallet_features):
+        wallet_blocks.append(
+            f"Wallet #{i + 1}: {wf['address']}\n"
+            f"  Transaction count: {wf['tx_count']}\n"
+            f"  First funder: {wf['first_funder']}\n"
+            f"  Avg timing gap: {wf['avg_timing_gap_seconds']:.1f}s\n"
+            f"  Timing std dev: {wf['timing_std_seconds']:.1f}s\n"
+            f"  Protocols interacted: {wf['num_protocols']}\n"
+            f"  Shares funder with cluster: {wf['has_common_funder']}\n"
+            f"  Behavior similarity (Jaccard): {wf['behavior_similarity_score']:.3f}\n"
+        )
+
+    wallets_text = "\n".join(wallet_blocks)
+    cluster_size = len(wallet_features)
+
+    # Build cluster-level signals section
+    signals_text = "CLUSTER-LEVEL SIGNALS:\n"
+
+    chain = cluster_signals.get("chain", {})
+    if chain.get("is_chain"):
+        signals_text += f"  CHAIN PATTERN DETECTED: Linear funding chain of height {chain['chain_height']}. This is a textbook sybil pattern (A funds B funds C funds D...).\n"
+    else:
+        signals_text += f"  Chain pattern: Not detected (longest chain: {chain.get('chain_height', 0)})\n"
+
+    anomaly = cluster_signals.get("amount_anomaly", {})
+    if anomaly.get("is_anomaly"):
+        signals_text += f"  AMOUNT ANOMALY: {anomaly['count']}/{anomaly['total_wallets']} wallets received ~{anomaly['dominant_amount']:.6f} ETH (spread: {anomaly['spread']:.4f}). Statistically impossible by chance.\n"
+    else:
+        signals_text += f"  Amount anomaly: Not detected (spread: {anomaly.get('spread', 0):.4f})\n"
+
+    tree = cluster_signals.get("funding_tree", {})
+    if tree.get("depth", 0) > 1:
+        signals_text += f"  MULTI-HOP FUNDING: Root funder is {tree['depth']} hops away via path: {' → '.join(a[:10]+'...' for a in tree['path'])}. Multi-layer obfuscation attempt.\n"
+    elif tree.get("depth", 0) == 1:
+        signals_text += f"  Direct funding from {tree.get('root', 'unknown')[:16]}...\n"
+
+    common = cluster_signals.get("common_funder", "")
+    if common:
+        signals_text += f"  Common funder: {common[:16]}... funds {cluster_size} wallets\n"
+
+    prompt = f"""Analyze this cluster of {cluster_size} blockchain wallets for Sybil attack.
+Consider BOTH individual wallet metrics AND the cluster-level signals below.
+
+{signals_text}
+
+INDIVIDUAL WALLETS:
+{wallets_text}
+
+CLASSIFICATION RULES:
+- CONFIRMED_SYBIL: chain pattern + shared funder + amount anomaly, OR identical behavior + shared funder
+- LIKELY_SYBIL: shared funder + (amount anomaly OR high similarity OR low tx count)
+- SUSPICIOUS: shared funder only, or single weak indicator
+- CLEAN: diverse funding, varied behavior, no cluster patterns
+
+Respond JSON: {{"wallets": [{{"address": "0x...", "risk": "CLEAN|SUSPICIOUS|LIKELY_SYBIL|CONFIRMED_SYBIL", "confidence": 0.0-1.0, "evidence": ["reason1", "reason2"], "reasoning": "brief explanation"}}]}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        verdicts = result.get("wallets", [])
+
+        out = []
+        for i, wf in enumerate(wallet_features):
+            if i < len(verdicts):
+                v = verdicts[i]
+                out.append({
+                    "risk": v.get("risk", "CLEAN"),
+                    "confidence": float(v.get("confidence", 0.0)),
+                    "evidence": v.get("evidence", []),
+                    "reasoning": v.get("reasoning", ""),
+                })
+            else:
+                out.append({
+                    "risk": "SUSPICIOUS",
+                    "confidence": 0.0,
+                    "evidence": ["LLM did not return verdict for this wallet"],
+                    "reasoning": "Fallback — missing from batch response.",
+                })
+        return out
+
+    except Exception as e:
+        print(f"  [WARNING] Enriched LLM classification failed: {e}")
+        # Fallback to rule-based scoring
+        return _rule_based_fallback(wallet_features, cluster_signals)
+
+
+def _rule_based_fallback(wallet_features: list[dict], cluster_signals: dict) -> list[dict]:
+    """Rule-based scoring fallback when LLM fails. Never crashes the UI."""
+    results = []
+    chain_detected = cluster_signals.get("chain", {}).get("is_chain", False)
+    amount_anomaly = cluster_signals.get("amount_anomaly", {}).get("is_anomaly", False)
+
+    for wf in wallet_features:
+        score = 0
+        evidence = []
+
+        if wf.get("has_common_funder"):
+            score += 2
+            evidence.append("Shared funder with cluster")
+        if wf.get("behavior_similarity_score", 0) > 0.5:
+            score += 2
+            evidence.append(f"High behavior similarity ({wf['behavior_similarity_score']:.2f})")
+        if wf.get("tx_count", 0) < 20:
+            score += 1
+            evidence.append(f"Low tx count ({wf['tx_count']})")
+        if chain_detected:
+            score += 2
+            evidence.append("Part of linear funding chain")
+        if amount_anomaly:
+            score += 2
+            evidence.append("Identical funding amounts detected")
+        if wf.get("timing_std_seconds", 0) > 0 and wf.get("avg_timing_gap_seconds", 0) > 0:
+            cv = wf["timing_std_seconds"] / wf["avg_timing_gap_seconds"]
+            if cv < 0.3:
+                score += 1
+                evidence.append(f"Regular timing (CV={cv:.2f})")
+
+        if score >= 6:
+            risk = "CONFIRMED_SYBIL"
+            conf = 0.95
+        elif score >= 4:
+            risk = "LIKELY_SYBIL"
+            conf = 0.75
+        elif score >= 2:
+            risk = "SUSPICIOUS"
+            conf = 0.5
+        else:
+            risk = "CLEAN"
+            conf = 0.8
+
+        results.append({
+            "risk": risk,
+            "confidence": conf,
+            "evidence": evidence,
+            "reasoning": f"Rule-based fallback (score: {score}/10)",
+        })
+    return results
+
+
 def llm_classify_sybil(
     address: str,
     tx_count: int,
@@ -550,4 +821,3 @@ Respond with a JSON object containing a "wallets" array with exactly {cluster_si
             }
             for _ in wallet_features
         ]
-    }
