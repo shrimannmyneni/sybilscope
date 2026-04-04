@@ -16,7 +16,6 @@ import from data_fetcher {
     llm_classify_cluster,
     llm_classify_cluster_enriched,
     get_cache_path,
-    sample_and_find_root,
     build_funding_clusters,
     build_louvain_clusters,
     merge_clusters,
@@ -200,19 +199,8 @@ with entry {
     print("=== SybilScope ===");
     print(f"Found {len(addresses)} addresses with on-chain activity\n");
 
-    # ---- Phase 1: Sample random wallets to find suspected root funder ----
-    print("Phase 1: Sampling wallets to find suspected sybil root...");
-    root_result = sample_and_find_root(addresses, sample_size=20);
-    root_funder = root_result[0];
-    funder_counts = root_result[1];
-    if root_funder {
-        print(f"  Suspected root funder: {root_funder[:16]}... (funded {funder_counts.get(root_funder, 0)} of {len(funder_counts)} sampled wallets)");
-    } else {
-        print("  No clear root funder found in sample.");
-    }
-
-    # ---- Phase 2: Fetch all wallet data (cheap, no LLM) ----
-    print("\nPhase 2: Collecting on-chain data for all wallets...");
+    # ---- Phase 1: Fetch all wallet data (cheap, no LLM) ----
+    print("Phase 1: Collecting on-chain data for all wallets...");
     flat_root = Cluster();
     root ++> flat_root;
     for addr in addresses {
@@ -222,8 +210,8 @@ with entry {
     all_wallet_data = collector.wallet_data;
     print(f"  Collected data for {len(all_wallet_data)} wallets");
 
-    # ---- Phase 3: Build funding + Louvain clusters, then merge ----
-    print("\nPhase 3: Building funding clusters...");
+    # ---- Phase 2: Build funding + Louvain clusters, then merge ----
+    print("\nPhase 2: Building funding clusters...");
     funder_clusters = build_funding_clusters(all_wallet_data);
     print(f"  Found {len(funder_clusters)} funding clusters");
 
@@ -242,16 +230,12 @@ with entry {
     print(f"  Merged into {len(clusters)} clusters:");
     for i in range(len(clusters)) {
         c = clusters[i];
-        marker = "";
-        if c["funder"] == root_funder {
-            marker = " <-- suspected root";
-        }
         source_tag = f" [{c['source']}]";
-        print(f"    [{i + 1}] {c['funder'][:24]}... | {c['size']} wallet(s){source_tag}{marker}");
+        print(f"    [{i + 1}] {c['funder'][:24]}... | {c['size']} wallet(s){source_tag}");
     }
 
-    # ---- Phase 4: BFS classify with agentic loop ----
-    print("\nPhase 4: BFS classification with agentic reasoning...");
+    # ---- Phase 3: BFS classify with agentic loop ----
+    print("\nPhase 3: BFS classification with agentic reasoning...");
     all_verdicts: list[dict] = [];
     clusters_processed = 0;
     wallets_skipped = 0;
