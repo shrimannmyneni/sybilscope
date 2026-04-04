@@ -2,3 +2,5 @@
 .env
 __pycache__/
 *.pyc
+venv/
+demo_data_cache.json
