@@ -135,6 +135,31 @@ def classify_sybil(
 
 ---
 
+## Detection Coverage
+
+SybilScope detects Sybil patterns across four layers of increasing sophistication. Coverage ranges from full (rule-engine-replaceable structural patterns) to AI-required evasion techniques where `by llm()` provides the core advantage.
+
+| Layer | Pattern | AI Needed | Coverage | How SybilScope Handles It |
+|-------|---------|-----------|----------|---------------------------|
+| **Structural** | Linear chain (A→B→C→D→...) | Not needed | **Full** | Walker traverses the chain natively. Detected in first pass. |
+| **Structural** | Star / hub-spoke (1 master → 100+ children) | Not needed | **Full** | Funding tree analysis flags `common_funder` immediately. |
+| **Structural** | Funding tree (master → mid-layer → leaf, 2-3 hops) | Not needed | **Full** | Agentic loop fetches 2-layer subgraph. Tree structure visible within round 2. |
+| **Structural** | Disperse contract (1 tx fans out to hundreds) | Not needed | **Full** | Contract interaction detected via internal tx scan. Same-source amounts confirm cluster. |
+| **Behavioral** | Timestamp fingerprint (correlated timestamps) | Marginal | **Full** | `timing_gap_seconds` computed from tx history. `by llm()` reasons about statistical impossibility. |
+| **Behavioral** | Operation cloning (identical protocol sequences) | Marginal | **Full** | `behavior_similarity` computed from protocol interaction sequence. AI flags identical ordering. |
+| **Behavioral** | Gas timing correlation | Required | **Partial** | Requires computing gas price distributions across addresses. Feasible but not built in v1. |
+| **Evasion** | Statistical amount anomaly (e.g. 2,997 wallets withdraw 0.00114-0.00116 ETH) | Required | **Full** | No graph needed. `by llm()` receives amount distribution and reasons that the pattern is statistically impossible by chance. |
+| **Evasion** | Cross-chain obfuscation (Chain A→bridge→Chain B→bridge→Chain C) | Required | **Full** | Etherscan V2 + Arbiscan queried in parallel. Walker merges cross-chain edges into one graph. AI reasons across the full multi-chain picture. |
+| **Evasion** | CEX mixing (funds routed through exchange hot wallets) | Required | **Partial** | Known CEX addresses labelled and excluded from graph. AI infers common origin from amount similarity. Higher miss rate than other patterns. |
+| **Evasion** | Behavioral noise injection (base script + random extra steps per wallet) | Required | **Partial** | `by llm()` handles fuzzy similarity better than rule engines. Accuracy degrades below ~60% similarity. |
+| **Evasion** | Temporal randomization (operations spread with injected delays) | Required | **Not in v1** | Requires long-term activity density analysis. Needs historical baseline data. Future roadmap item. |
+| **Social** | Community camouflage (bought Discord/Twitter accounts) | Required | **Out of scope** | Requires off-chain data (Discord, Twitter). Our system is on-chain only by design. |
+| **Social** | Industrialized farming (800k+ wallets, human oversight) | Required | **Partial** | At scale, structural patterns re-emerge even with evasion. Walker handles volume well. Social coordination layer remains undetectable. |
+
+**Legend:** **Full** = fully covered | **Partial** = limited coverage | **Not in v1** = planned | **Out of scope** = by design
+
+---
+
 ## Data Sources
 
 ### Etherscan V2 API (Arbitrum One)

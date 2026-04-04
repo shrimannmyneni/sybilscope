@@ -7,6 +7,7 @@ import os
 import random
 import requests
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 ETHERSCAN_KEY = os.getenv("ETHERSCAN_API_KEY", "")
@@ -105,8 +106,8 @@ def fetch_wallet_data(address: str) -> dict:
         "created_at": created_at,
         "tx_count": len(txs),
         "first_funder": first_funder,
-        "protocol_interactions": protocols[:20],  # cap at 20
-        "operation_intervals": intervals[:50],  # cap at 50
+        "protocol_interactions": protocols[:20],
+        "operation_intervals": intervals[:50],
         "label": label,
         "transactions": txs,
         "internal_transactions": internal,
@@ -549,3 +550,4 @@ Respond with a JSON object containing a "wallets" array with exactly {cluster_si
             }
             for _ in wallet_features
         ]
+    }

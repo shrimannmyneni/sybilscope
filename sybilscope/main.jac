@@ -21,6 +21,9 @@ import from data_fetcher {
     merge_clusters,
     detect_chain
 }
+import from data_fetcher { fetch_wallet_data }
+import from analyzers { compute_timing_stats, find_common_funder, compute_behavior_similarity }
+import from llm_classifier { llm_classify_sybil }
 import json;
 
 # ---- Data Types ----
