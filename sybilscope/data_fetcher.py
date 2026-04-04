@@ -4,6 +4,7 @@ Loads from demo_data_cache.json first, falls back to live Etherscan API.
 
 import json
 import os
+import random
 import requests
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -14,6 +15,11 @@ CHAIN_ID = 42161
 
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "..", "demo_data_cache.json")
 _cache: dict | None = None
+
+
+def get_cache_path() -> str:
+    """Return the resolved path to the demo data cache."""
+    return CACHE_PATH
 
 
 def _load_cache() -> dict:
@@ -163,6 +169,49 @@ def compute_behavior_similarity(wallet_a: dict, wallet_b: dict) -> float:
     return len(intersection) / len(union)
 
 
+def sample_and_find_root(
+    addresses: list[str], sample_size: int = 20
+) -> tuple[str | None, dict[str, int]]:
+    """Sample random wallets to identify the most likely sybil root funder.
+
+    Picks a random subset of wallets, looks at who funded each one,
+    and returns the funder that appears most often — the likely sybil hub.
+    """
+    sample = random.sample(addresses, min(sample_size, len(addresses)))
+    funder_counts: dict[str, int] = {}
+    for addr in sample:
+        data = fetch_wallet_data(addr)
+        funder = data.get("first_funder", "").lower()
+        if funder:
+            funder_counts[funder] = funder_counts.get(funder, 0) + 1
+    if not funder_counts:
+        return None, {}
+    root = max(funder_counts, key=funder_counts.get)  # type: ignore
+    return root, funder_counts
+
+
+def build_funding_clusters(all_wallet_data: list[dict]) -> list[dict]:
+    """Group wallets by their first funder, sorted by cluster size descending.
+
+    Largest cluster first = most suspicious (many wallets sharing one funder).
+    Returns list of {"funder": str, "addresses": [str], "size": int}.
+    """
+    funder_to_addrs: dict[str, list[str]] = {}
+    for wd in all_wallet_data:
+        funder = wd.get("first_funder", "").lower()
+        if not funder:
+            funder = "unknown"
+        if funder not in funder_to_addrs:
+            funder_to_addrs[funder] = []
+        funder_to_addrs[funder].append(wd["address"])
+
+    clusters = []
+    for funder, addrs in funder_to_addrs.items():
+        clusters.append({"funder": funder, "addresses": addrs, "size": len(addrs)})
+    clusters.sort(key=lambda c: c["size"], reverse=True)
+    return clusters
+
+
 def llm_classify_sybil(
     address: str,
     tx_count: int,
@@ -201,17 +250,25 @@ Key Sybil indicators:
 Respond in this exact JSON format:
 {{"risk": "CLEAN|SUSPICIOUS|LIKELY_SYBIL|CONFIRMED_SYBIL", "confidence": 0.0-1.0, "evidence": ["reason1", "reason2"], "reasoning": "brief explanation"}}"""
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        response_format={"type": "json_object"},
-    )
-
-    result = json.loads(response.choices[0].message.content)
-    return {
-        "risk": result.get("risk", "CLEAN"),
-        "confidence": float(result.get("confidence", 0.0)),
-        "evidence": result.get("evidence", []),
-        "reasoning": result.get("reasoning", ""),
-    }
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        return {
+            "risk": result.get("risk", "CLEAN"),
+            "confidence": float(result.get("confidence", 0.0)),
+            "evidence": result.get("evidence", []),
+            "reasoning": result.get("reasoning", ""),
+        }
+    except Exception as e:
+        print(f"  [WARNING] LLM classification failed for {address}: {e}")
+        return {
+            "risk": "SUSPICIOUS",
+            "confidence": 0.0,
+            "evidence": [f"LLM classification unavailable: {e}"],
+            "reasoning": "Fallback verdict — LLM call failed.",
+        }
