@@ -6,6 +6,7 @@ import json
 import os
 import requests
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 ETHERSCAN_KEY = os.getenv("ETHERSCAN_API_KEY", "")
@@ -99,119 +100,10 @@ def fetch_wallet_data(address: str) -> dict:
         "created_at": created_at,
         "tx_count": len(txs),
         "first_funder": first_funder,
-        "protocol_interactions": protocols[:20],  # cap at 20
-        "operation_intervals": intervals[:50],  # cap at 50
+        "protocol_interactions": protocols[:20],
+        "operation_intervals": intervals[:50],
         "label": label,
         "transactions": txs,
         "internal_transactions": internal,
         "token_transfers": tokens,
-    }
-
-
-def compute_timing_stats(intervals: list[float]) -> dict:
-    """Compute timing statistics from operation intervals."""
-    if not intervals:
-        return {"avg_gap": 0.0, "min_gap": 0.0, "max_gap": 0.0, "std_gap": 0.0, "count": 0}
-
-    avg = sum(intervals) / len(intervals)
-    min_gap = min(intervals)
-    max_gap = max(intervals)
-    variance = sum((x - avg) ** 2 for x in intervals) / len(intervals)
-    std = variance ** 0.5
-
-    return {
-        "avg_gap": round(avg, 2),
-        "min_gap": round(min_gap, 2),
-        "max_gap": round(max_gap, 2),
-        "std_gap": round(std, 2),
-        "count": len(intervals),
-    }
-
-
-def find_common_funder(wallets: list[dict]) -> str | None:
-    """Check if multiple wallets share the same first funder."""
-    funders = [w.get("first_funder", "") for w in wallets if w.get("first_funder")]
-    if not funders:
-        return None
-
-    # Find most common funder
-    funder_counts: dict[str, int] = {}
-    for f in funders:
-        f_lower = f.lower()
-        funder_counts[f_lower] = funder_counts.get(f_lower, 0) + 1
-
-    most_common = max(funder_counts, key=funder_counts.get)  # type: ignore
-    if funder_counts[most_common] >= 2:
-        return most_common
-    return None
-
-
-def compute_behavior_similarity(wallet_a: dict, wallet_b: dict) -> float:
-    """Compute similarity between two wallets based on protocol interactions."""
-    protos_a = set(p.lower() for p in wallet_a.get("protocol_interactions", []))
-    protos_b = set(p.lower() for p in wallet_b.get("protocol_interactions", []))
-
-    if not protos_a and not protos_b:
-        return 0.0
-
-    intersection = protos_a & protos_b
-    union = protos_a | protos_b
-
-    if not union:
-        return 0.0
-
-    return len(intersection) / len(union)
-
-
-def llm_classify_sybil(
-    address: str,
-    tx_count: int,
-    first_funder: str,
-    avg_timing_gap_seconds: float,
-    timing_std_seconds: float,
-    num_protocols: int,
-    has_common_funder: bool,
-    behavior_similarity_score: float,
-    cluster_size: int,
-) -> dict:
-    """Use OpenAI to classify a wallet as sybil or legitimate."""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    prompt = f"""Analyze this blockchain wallet and determine if it is part of a Sybil attack.
-
-Wallet: {address}
-Transaction count: {tx_count}
-First funder: {first_funder}
-Average timing gap between txs: {avg_timing_gap_seconds:.1f} seconds
-Timing standard deviation: {timing_std_seconds:.1f} seconds
-Number of protocols interacted with: {num_protocols}
-Shares funder with other wallets in cluster: {has_common_funder}
-Behavior similarity with peers (Jaccard): {behavior_similarity_score:.3f}
-Cluster size (wallets sharing funder): {cluster_size}
-
-Key Sybil indicators:
-- Low tx count (<20) with minimum qualifying interactions only
-- Shared first funder across multiple wallets
-- Regular timing gaps (low std relative to mean = bot-like precision)
-- High behavior similarity with peers (>0.5 = identical protocol usage)
-- Large cluster size sharing same funder
-
-Respond in this exact JSON format:
-{{"risk": "CLEAN|SUSPICIOUS|LIKELY_SYBIL|CONFIRMED_SYBIL", "confidence": 0.0-1.0, "evidence": ["reason1", "reason2"], "reasoning": "brief explanation"}}"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        response_format={"type": "json_object"},
-    )
-
-    result = json.loads(response.choices[0].message.content)
-    return {
-        "risk": result.get("risk", "CLEAN"),
-        "confidence": float(result.get("confidence", 0.0)),
-        "evidence": result.get("evidence", []),
-        "reasoning": result.get("reasoning", ""),
     }

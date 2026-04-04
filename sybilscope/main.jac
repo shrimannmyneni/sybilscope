@@ -6,13 +6,9 @@ Leverages JAC's Data Spatial Programming paradigm:
 - Semantic strings guide classification
 """
 
-import from data_fetcher {
-    fetch_wallet_data,
-    compute_timing_stats,
-    find_common_funder,
-    compute_behavior_similarity,
-    llm_classify_sybil
-}
+import from data_fetcher { fetch_wallet_data }
+import from analyzers { compute_timing_stats, find_common_funder, compute_behavior_similarity }
+import from llm_classifier { llm_classify_sybil }
 import json;
 
 # ---- Data Types ----
