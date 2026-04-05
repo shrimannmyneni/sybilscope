@@ -398,7 +398,7 @@ def build_louvain_clusters(all_wallet_data: list[dict]) -> list[dict]:
     if G.number_of_edges() == 0:
         return []
 
-    partition = community_louvain.best_partition(G, weight="weight")
+    partition = community_louvain.best_partition(G, weight="weight", random_state=42)
 
     # Group addresses by community
     community_to_addrs: dict[int, list[str]] = {}
