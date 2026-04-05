@@ -16,6 +16,7 @@ import from data_fetcher {
     llm_classify_cluster,
     llm_classify_cluster_enriched,
     get_cache_path,
+    sample_and_find_root,
     build_funding_clusters,
     build_louvain_clusters,
     merge_clusters,
@@ -24,7 +25,8 @@ import from data_fetcher {
     detect_tx_count_fingerprint,
     build_funding_tree,
     post_llm_override,
-    refine_louvain_clusters
+    refine_louvain_clusters,
+    build_json_output
 }
 import json;
 
@@ -196,11 +198,10 @@ with entry {
         }
     }
 
-    print("=== SybilScope ===");
-    print(f"Found {len(addresses)} addresses with on-chain activity\n");
+    print(f"[1/4] Sampling root funder from {len(addresses)} addresses...");
+    sample_and_find_root(addresses, sample_size=20);
 
-    # ---- Phase 1: Fetch all wallet data (cheap, no LLM) ----
-    print("Phase 1: Collecting on-chain data for all wallets...");
+    print("[2/4] Collecting on-chain data...");
     flat_root = Cluster();
     root ++> flat_root;
     for addr in addresses {
@@ -208,34 +209,15 @@ with entry {
     }
     collector = flat_root spawn DataCollector();
     all_wallet_data = collector.wallet_data;
-    print(f"  Collected data for {len(all_wallet_data)} wallets");
 
-    # ---- Phase 2: Build funding + Louvain clusters, then merge ----
-    print("\nPhase 2: Building funding clusters...");
+    print("[3/4] Building clusters (funding + Louvain)...");
     funder_clusters = build_funding_clusters(all_wallet_data);
-    print(f"  Found {len(funder_clusters)} funding clusters");
-
-    print("  Running Louvain community detection on transaction graph...");
     louvain_clusters = build_louvain_clusters(all_wallet_data);
-    print(f"  Found {len(louvain_clusters)} Louvain communities (2+ wallets)");
-
-    # Refine large clusters — remove bidirectional hub nodes
-    louvain_clusters_raw = len(louvain_clusters);
     louvain_clusters = refine_louvain_clusters(louvain_clusters, all_wallet_data);
-    if len(louvain_clusters) != louvain_clusters_raw {
-        print(f"  Refined: {louvain_clusters_raw} -> {len(louvain_clusters)} clusters (removed bidirectional hubs)");
-    }
-
     clusters = merge_clusters(funder_clusters, louvain_clusters);
-    print(f"  Merged into {len(clusters)} clusters:");
-    for i in range(len(clusters)) {
-        c = clusters[i];
-        source_tag = f" [{c['source']}]";
-        print(f"    [{i + 1}] {c['funder'][:24]}... | {c['size']} wallet(s){source_tag}");
-    }
+    print(f"      {len(clusters)} clusters found");
 
-    # ---- Phase 3: BFS classify with agentic loop ----
-    print("\nPhase 3: BFS classification with agentic reasoning...");
+    print("[4/4] Classifying with LLM reasoning...");
     all_verdicts: list[dict] = [];
     clusters_processed = 0;
     wallets_skipped = 0;
@@ -246,12 +228,10 @@ with entry {
         # Skip trivial clusters
         if cluster["size"] < 2 {
             wallets_skipped += cluster["size"];
-            print(f"\n  --- Cluster {i + 1}/{len(clusters)}: funder={cluster['funder'][:16]}... ({cluster['size']} wallets) — SKIPPED (too small) ---");
             continue;
         }
 
         clusters_processed += 1;
-        print(f"\n  --- Cluster {i + 1}/{len(clusters)}: funder={cluster['funder'][:16]}... ({cluster['size']} wallets) ---");
 
         # Build lookup of pre-collected wallet data for this cluster
         cluster_addr_set = set(cluster["addresses"]);
@@ -267,23 +247,14 @@ with entry {
 
         # 1. Chain detection
         chain_result = detect_chain(cluster_wallet_data);
-        if chain_result["is_chain"] {
-            print(f"    Chain pattern detected (height={chain_result['chain_height']})");
-        }
 
         # 2. Amount anomaly detection
         amount_result = detect_amount_anomaly(cluster_wallet_data);
-        if amount_result["is_anomaly"] {
-            print(f"    Amount anomaly: {amount_result['count']}/{amount_result['total_wallets']} wallets received ~{amount_result['dominant_amount']:.6f} ETH");
-        }
 
         # 3. Multi-hop funding tree (from cluster funder)
         tree_result = {"root": cluster["funder"], "path": [], "depth": 0, "fan_out": {}};
         if cluster["funder"] and not cluster["funder"].startswith("louvain") {
             tree_result = build_funding_tree(cluster["funder"], max_depth=3);
-            if tree_result["depth"] > 1 {
-                print(f"    Multi-hop funding: depth={tree_result['depth']}, root={tree_result['root'][:12]}...");
-            }
         }
 
         # 4. Common funder
@@ -291,9 +262,6 @@ with entry {
 
         # 5. TX count fingerprint (bot signature: identical tx counts)
         fingerprint_result = detect_tx_count_fingerprint(cluster_wallet_data);
-        if fingerprint_result["is_fingerprint"] {
-            print(f"    TX fingerprint: {fingerprint_result['matching_wallets']}/{fingerprint_result['total_wallets']} wallets have exactly {fingerprint_result['dominant_count']} txs");
-        }
 
         cluster_signals = {
             "chain": chain_result,
@@ -494,6 +462,11 @@ with entry {
     if common {
         print(f"\nCommon funder detected across cluster: {common}");
     }
+
+    # ---- Build JSON output for frontend (delegated to Python) ----
+    import os;
+    output_path = os.environ.get("SYBILSCOPE_OUTPUT", "../analysis_output.json");
+    build_json_output(all_verdicts, all_wallet_data, clusters, sybil_count, common if common else "", output_path);
 
     print("\nDone!");
 }
