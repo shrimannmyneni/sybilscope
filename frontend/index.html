@@ -246,11 +246,13 @@ function renderGraph(data) {
     .attr("refX", 12).attr("refY", 0).attr("markerWidth", 6).attr("markerHeight", 6)
     .attr("orient", "auto")
     .append("path").attr("d", "M0,-3L6,0L0,3").attr("fill", "#1D9E75").attr("opacity", 0.5);
-  // Transfer-edge arrow (wallet<->wallet tx flow, distinct from funder tree)
+  // Transfer-edge arrow (wallet<->wallet tx flow, distinct from funder tree).
+  // markerUnits=userSpaceOnUse = fixed arrow size regardless of stroke-width.
   defs.append("marker").attr("id", "arrow-transfer").attr("viewBox", "0 -3 6 6")
-    .attr("refX", 12).attr("refY", 0).attr("markerWidth", 7).attr("markerHeight", 7)
+    .attr("refX", 14).attr("refY", 0).attr("markerWidth", 8).attr("markerHeight", 8)
+    .attr("markerUnits", "userSpaceOnUse")
     .attr("orient", "auto")
-    .append("path").attr("d", "M0,-3L6,0L0,3").attr("fill", "#A855F7").attr("opacity", 0.9);
+    .append("path").attr("d", "M0,-3L6,0L0,3").attr("fill", "#A855F7").attr("opacity", 0.85);
 
   const nodes = data.nodes.map(d => ({...d}));
   const edges = data.edges.map(d => ({...d}));
@@ -300,22 +302,21 @@ function renderGraph(data) {
     })
     .attr("stroke-width", d => {
       if (d.type === "transfer") {
-        return Math.min(4, 1 + Math.log2((d.tx_count || 1) + 1));
+        return Math.min(2.2, 1 + 0.4 * Math.log2((d.tx_count || 1) + 1));
       }
       return 1;
     })
-    .attr("stroke-opacity", d => d.type === "transfer" ? 0.8 : 0.4)
+    .attr("stroke-opacity", d => d.type === "transfer" ? 0.7 : 0.4)
     .attr("stroke-dasharray", d => d.type === "transfer" ? "4 3" : null)
     .attr("marker-end", d => {
       if (d.type === "transfer") return "url(#arrow-transfer)";
       const src = nodes.find(n => n.id === (d.source.id || d.source));
       return src && src.is_sybil ? "url(#arrow-red)" : "url(#arrow-green)";
-    })
-    .append("title")
-    .text(d => {
-      if (d.type !== "transfer") return "funding edge";
-      return `transfer: ${d.tx_count} tx, ${(d.total_amount || 0).toFixed(4)} ETH`;
     });
+  link.append("title").text(d => {
+    if (d.type !== "transfer") return "funding edge";
+    return `transfer: ${d.tx_count} tx, ${(d.total_amount || 0).toFixed(4)} ETH`;
+  });
 
   // Glow circles behind hubs
   const glow = svg.append("g")

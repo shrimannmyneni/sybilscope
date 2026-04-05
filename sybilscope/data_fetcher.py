@@ -1430,6 +1430,10 @@ def build_json_output(
     # Build nodes
     json_nodes: list[dict] = []
     hub_added: set[str] = set()
+    # Addresses that will appear as regular wallet nodes — never create a
+    # duplicate hub node for any of these (prevents two D3 nodes sharing
+    # the same id when A funds B and B funds A, or in short funding chains).
+    wallet_ids: set[str] = {v["address"] for v in all_verdicts}
 
     for v in all_verdicts:
         cluster_id = addr_to_cluster_id.get(v["address"], 0)
@@ -1438,7 +1442,9 @@ def build_json_output(
         tx_count = wd.get("tx_count", 0)
 
         hub_id = funder if funder else f"unknown-{cluster_id}"
-        if cluster_id > 0 and hub_id not in hub_added:
+        # Skip hub creation if this funder is itself a tracked wallet; the
+        # wallet node will act as its own hub for edge-rendering purposes.
+        if cluster_id > 0 and hub_id not in hub_added and hub_id not in wallet_ids:
             json_nodes.append({
                 "id": hub_id,
                 "risk": "HUB",
@@ -1476,11 +1482,23 @@ def build_json_output(
     #   type=transfer — real wallet<->wallet Transfer edges (materialized by
     #                   the JAC GraphBuilder walker), carrying tx_count/amount.
     hub_ids = {n["id"] for n in json_nodes if n["is_hub"]}
-    json_edges: list[dict] = [
-        {"source": n["funder"], "target": n["id"], "type": "funding"}
-        for n in json_nodes
-        if not n["is_hub"] and n["funder"] in hub_ids
-    ]
+    # A wallet's funder may be a dedicated hub node OR another tracked wallet
+    # (short funding chains) — accept both as valid edge endpoints.
+    valid_funder_ids = hub_ids | wallet_ids
+    json_edges: list[dict] = []
+    for n in json_nodes:
+        if n["is_hub"]:
+            continue
+        # Wallets whose first_funder wasn't resolved still belong to a cluster
+        # and get a synthetic "unknown-{cluster_id}" hub — fall back to that
+        # so they don't appear as floating dots in the graph.
+        effective_funder = n["funder"] if n["funder"] else f"unknown-{n['cluster_id']}"
+        if effective_funder != n["id"] and effective_funder in valid_funder_ids:
+            json_edges.append({
+                "source": effective_funder,
+                "target": n["id"],
+                "type": "funding",
+            })
 
     classified_ids = {n["id"] for n in json_nodes}
     for te in (transfer_edges or []):
