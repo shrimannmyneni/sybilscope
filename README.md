@@ -223,9 +223,11 @@ No separate Arbiscan key needed — use Etherscan API key with chainid=42161.
 
 ## Academic Foundation
 
+The sub-graph `by llm()` design is our attempt to match the 2025 Subgraph-Feature-Propagation paper's core insight — that wallet classification benefits from structural sub-graph input rather than per-wallet flat feature vectors — using structured LLM reasoning in place of a GNN. Instead of training a graph neural network, we pass wallet nodes + Transfer edges directly into a type-annotated `by llm()` call and let the model reason about cycles, fan-outs, and hubs the way a human analyst would.
+
 | # | Paper | Relevance |
 |---|-------|-----------|
-| 1 | [Detecting Sybil Addresses via Subgraph Feature Propagation](https://arxiv.org/abs/2505.09313) (2025) | Same graph construction & temporal features; we replace LightGBM with `by llm()` for semantic reasoning |
+| 1 | [Detecting Sybil Addresses via Subgraph Feature Propagation](https://arxiv.org/abs/2505.09313) (2025) | Same graph construction & temporal features; we replace LightGBM with `by llm()` for semantic reasoning over the sub-graph |
 | 2 | [Fast Unfolding of Communities in Large Networks](https://arxiv.org/pdf/0803.0476.pdf) — Louvain (2008) | Foundation for Arbitrum's detection; our Walker implements similar traversal with AI reasoning at each step |
 | 3 | [From Louvain to Leiden](https://www.nature.com/articles/s41598-019-41695-z) (2019) | Addresses Louvain's disconnected community defect; our AI layer acts as the semantic refinement phase |
 | 4 | [Arbitrum Foundation Sybil Detection](https://github.com/ArbitrumFoundation/sybil-detection) (2023) | Ground truth dataset and methodology baseline |
@@ -283,22 +285,32 @@ Open **http://localhost:8000** in your browser.
 - Graph shows red (confirmed sybil) / yellow (likely) / amber (suspicious) / green (clean) nodes
 - Click any cluster or node for AI verdict, evidence, and confidence score
 
-### 5. Run JAC pipeline directly (CLI)
+### 5. Saved demo datasets
+
+Two analyses ship pre-computed:
+
+- **`analysis`** — 150-wallet HOP Protocol demo (62 classified wallets, 10 clusters, 30 Transfer edges).
+  `http://localhost:8080/graph?analysis=analysis`
+- **`curated`** — 24-wallet tight demo curated to show ring/fan-out structure clearly.
+  `http://localhost:8080/graph?analysis=curated`
+
+See [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) for a 5-minute narrated walkthrough covering both.
+
+### 6. Run JAC pipeline directly (CLI)
 
 ```bash
 cd sybilscope
 jac run main.jac
 ```
 
-Runs the full pipeline and writes `analysis_output.json` to the project root.
-
-### 6. Build the curated demo dataset
+This runs the full pipeline in terminal and prints verdicts for all cached addresses.
+To run on a custom cache:
 
 ```bash
-python3 scripts/build_demo_subset.py
+SYBILSCOPE_CACHE=/path/to/cache.json \
+SYBILSCOPE_OUTPUT=../my_output.json \
+jac run main.jac
 ```
-
-Produces `demo_curated_cache.json` — 9 confirmed sybils + 15 clean legitimate wallets with zero tx overlap, for a balanced demo with no false positives.
 
 ---
 
@@ -348,8 +360,10 @@ DEMO_SCRIPT.md          — 5-minute live demo script with Q&A cheat sheet
 | Arbitrum Sybil addresses | 148,595 | Arbitrum Foundation |
 | Tokens stolen | 21.8% | X-explore analysis |
 | HOP confirmed Sybils | 14,196 | HOP Protocol |
-| Demo detection rate | 100% (31/31) | Internal benchmark |
-| Precision (mixed test) | 87.1% | Sybil + legitimate test |
+| Demo detection rate | 100% (31/31) | Internal benchmark (v1, flat features) |
+| Precision (mixed test) | 87.1% | Sybil + legitimate test (v1) |
+| Sub-graph pipeline recall | 96% (52/54 sybils) | 150-wallet HOP demo (v2, current) |
+| Sub-graph pipeline precision | 88% (52/59 flagged) | 150-wallet HOP demo (v2, current) |
 | LLM cost per run | <$0.01 | GPT-4o-mini |
 | Cached transactions | 105,784 | demo_data_cache.json |
 
