@@ -1,10 +1,9 @@
 """SybilScope — On-Chain Sybil Detector using JAC Walker + LLM Reasoning
 
-Strategy: Root-first BFS detection
-1. Sample random wallets to find the most common funder (suspected sybil hub)
-2. Group all wallets into funding clusters sorted by suspicion
-3. BFS classify cluster-by-cluster from the root outward
-4. Early-stop when a cluster shows clean behavior
+Strategy:
+1. Group all wallets into funding + Louvain clusters sorted by suspicion
+2. Classify cluster-by-cluster from the most suspicious outward
+3. Early-stop when a cluster shows clean behavior
 """
 
 import from data_fetcher {
@@ -16,7 +15,6 @@ import from data_fetcher {
     llm_classify_cluster,
     llm_classify_cluster_enriched,
     get_cache_path,
-    sample_and_find_root,
     build_funding_clusters,
     build_louvain_clusters,
     merge_clusters,
@@ -67,32 +65,54 @@ sem SybilRisk.LIKELY_SYBIL = "Multiple sybil indicators: shared funder with othe
 sem SybilRisk.CONFIRMED_SYBIL = "High-confidence sybil: identical funding source across many wallets, machine-precision timing gaps, minimum qualifying interactions only";
 
 obj SybilVerdict {
-    has risk: SybilRisk = SybilRisk.CLEAN,
+    has address: str = "",
+        risk: SybilRisk = SybilRisk.CLEAN,
         confidence: float = 0.0,
         evidence: list[str] = [],
-        estimated_cluster_size: int = 0,
         reasoning: str = "";
 }
 
-# ---- by llm() declaration (JAC paradigm showcase) ----
+obj WalletFeatures {
+    has address: str,
+        tx_count: int,
+        first_funder: str,
+        avg_timing_gap_seconds: float,
+        timing_std_seconds: float,
+        num_protocols: int,
+        has_common_funder: bool,
+        behavior_similarity_score: float;
+}
 
-def classify_sybil_ideal(
-    address: str,
-    tx_count: int,
-    first_funder: str,
-    avg_timing_gap_seconds: float,
-    timing_std_seconds: float,
-    num_protocols: int,
-    has_common_funder: bool,
-    behavior_similarity_score: float,
-    cluster_size: int
-) -> SybilVerdict
+# ---- by llm() declaration (JAC paradigm primary classifier) ----
+
+def classify_cluster_jac(
+    wallets: list[WalletFeatures],
+    cluster_size: int,
+    common_funder: str,
+    chain_detected: bool,
+    chain_height: int,
+    amount_anomaly: bool,
+    dominant_amount: float,
+    tx_fingerprint: bool,
+    dominant_tx_count: int,
+    funding_tree_depth: int
+) -> list[SybilVerdict]
 by llm();
 
-sem classify_sybil_ideal = """
-Analyze on-chain wallet behavior to determine if this address is part of a Sybil attack.
-Key indicators: shared funder, regular timing gaps, high behavior similarity, low tx diversity.
-Provide specific evidence and confidence score.
+sem classify_cluster_jac = """
+Analyze this cluster of blockchain wallets for Sybil attack. Return one verdict per wallet
+in the same order as input.
+
+CRITICAL: Sharing a funder with multiple wallets is STRONG evidence of Sybil — real users
+almost never share the same first funder by coincidence. Err on the side of flagging.
+
+CLASSIFICATION RULES:
+- CONFIRMED_SYBIL: shared funder + (chain pattern OR amount anomaly OR identical behavior OR identical tx counts)
+- LIKELY_SYBIL: shared funder + any one additional indicator (low tx count, similar timing, protocol overlap)
+- SUSPICIOUS: shared funder alone, or single weak indicator
+- CLEAN: independent funding AND diverse behavior
+
+Provide 2-3 specific evidence items and a brief reasoning for each wallet.
 """;
 
 # ---- Walkers ----
@@ -198,10 +218,7 @@ with entry {
         }
     }
 
-    print(f"[1/4] Sampling root funder from {len(addresses)} addresses...");
-    sample_and_find_root(addresses, sample_size=20);
-
-    print("[2/4] Collecting on-chain data...");
+    print(f"[1/3] Collecting on-chain data from {len(addresses)} addresses...");
     flat_root = Cluster();
     root ++> flat_root;
     for addr in addresses {
@@ -210,14 +227,14 @@ with entry {
     collector = flat_root spawn DataCollector();
     all_wallet_data = collector.wallet_data;
 
-    print("[3/4] Building clusters (funding + Louvain)...");
+    print("[2/3] Building clusters (funding + Louvain)...");
     funder_clusters = build_funding_clusters(all_wallet_data);
     louvain_clusters = build_louvain_clusters(all_wallet_data);
     louvain_clusters = refine_louvain_clusters(louvain_clusters, all_wallet_data);
     clusters = merge_clusters(funder_clusters, louvain_clusters);
     print(f"      {len(clusters)} clusters found");
 
-    print("[4/4] Classifying with LLM reasoning...");
+    print("[3/3] Classifying with LLM reasoning...");
     all_verdicts: list[dict] = [];
     clusters_processed = 0;
     wallets_skipped = 0;
@@ -314,9 +331,52 @@ with entry {
         judge = SybilJudge(wallet_data=all_wallet_data, cluster_data=analyze_wallet_data);
         cluster_node spawn judge;
 
-        # ---- Enriched LLM classification with all signals ----
-        print("    Classifying with enriched signals (timing + funding tree + chain + amount + fingerprint)...");
-        batch_verdicts = llm_classify_cluster_enriched(judge.features, cluster_signals);
+        # ---- JAC-native classification via by llm() (PRIMARY) ----
+        # JAC's structured type-driven LLM reasoning — no manual prompt/JSON parsing
+        print("    Classifying with JAC by llm() (primary)...");
+        batch_verdicts = [];
+        try {
+            wallet_features = [];
+            for f in judge.features {
+                wallet_features.append(WalletFeatures(
+                    address=f["address"],
+                    tx_count=f["tx_count"],
+                    first_funder=f["first_funder"],
+                    avg_timing_gap_seconds=f["avg_timing_gap_seconds"],
+                    timing_std_seconds=f["timing_std_seconds"],
+                    num_protocols=f["num_protocols"],
+                    has_common_funder=f["has_common_funder"],
+                    behavior_similarity_score=f["behavior_similarity_score"]
+                ));
+            }
+
+            jac_verdicts = classify_cluster_jac(
+                wallets=wallet_features,
+                cluster_size=cluster_signals["cluster_size"],
+                common_funder=cluster_signals.get("common_funder", ""),
+                chain_detected=chain_result.get("is_chain", False),
+                chain_height=chain_result.get("chain_height", 0),
+                amount_anomaly=amount_result.get("is_anomaly", False),
+                dominant_amount=amount_result.get("dominant_amount", 0.0),
+                tx_fingerprint=fingerprint_result.get("is_fingerprint", False),
+                dominant_tx_count=fingerprint_result.get("dominant_count", 0),
+                funding_tree_depth=tree_result.get("depth", 0)
+            );
+
+            # Convert SybilVerdict objects to dicts for pipeline compatibility
+            for v in jac_verdicts {
+                batch_verdicts.append({
+                    "risk": str(v.risk).replace("SybilRisk.", ""),
+                    "confidence": v.confidence,
+                    "evidence": v.evidence if v.evidence else [],
+                    "reasoning": v.reasoning
+                });
+            }
+            print(f"    [JAC by llm()] classified {len(batch_verdicts)} wallets");
+        } except Exception as e {
+            print(f"    [JAC by llm() FAILED] falling back to Python: {e}");
+            batch_verdicts = llm_classify_cluster_enriched(judge.features, cluster_signals);
+        }
 
         # Post-LLM override: catch false negatives
         batch_verdicts = post_llm_override(batch_verdicts, judge.features, cluster_signals);
