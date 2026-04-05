@@ -76,14 +76,15 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0f; c
 
 /* Address list */
 .addr-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
-.addr-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 4px; background: #141418; cursor: pointer; transition: background 0.15s; }
-.addr-row:hover { background: #1a1a22; }
+.addr-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; background: #141418; border: 0.5px solid transparent; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.addr-row:hover { background: #1e1e2a; border-color: #2a2a38; }
 .addr-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .addr-hash { font-size: 11px; font-family: monospace; color: #888; }
 .addr-tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-left: auto; }
 .tag-sybil { background: #1a0808; color: #E24B4A; }
 .tag-clean { background: #0a1a0a; color: #1D9E75; }
 .tag-suspicious { background: #1a1508; color: #EF9F27; }
+.tag-likely { background: #1a1200; color: #f0c040; }
 
 /* Reasoning */
 .reasoning { font-size: 12px; color: #666; line-height: 1.5; font-style: italic; }
@@ -103,7 +104,7 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0f; c
 
 <div class="app">
   <div class="topbar">
-    <div class="logo"><span>Sybil</span>Scope</div>
+    <a class="logo" href="http://0.0.0.0:8000/" style="text-decoration:none;color:inherit"><span>Sybil</span>Scope</a>
     <div class="subtitle">REAL-TIME SYBIL DETECTOR</div>
     <div class="stats">
       <div class="stat"><div class="stat-n" id="stat-scanned">0</div><div class="stat-l">SCANNED</div></div>
@@ -340,15 +341,33 @@ function renderGraph(data) {
       .on("end", (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
     );
 
-  // Cluster labels
-  const clusterLabels = svg.append("g")
-    .selectAll("text")
+  // Subtle dot-grid background
+  const gridGroup = svg.append("g").attr("pointer-events", "none");
+  const gridSpacing = 40;
+  for (let gx = gridSpacing; gx < width; gx += gridSpacing) {
+    for (let gy = gridSpacing; gy < height; gy += gridSpacing) {
+      gridGroup.append("circle").attr("cx", gx).attr("cy", gy).attr("r", 0.8).attr("fill", "#1a1a2a").attr("opacity", 0.6);
+    }
+  }
+
+  // Cluster label groups (rect backdrop + text)
+  const labelGroups = svg.append("g").selectAll("g")
     .data(clusterIds)
-    .enter().append("text")
+    .enter().append("g");
+
+  labelGroups.append("rect")
+    .attr("rx", 4)
+    .attr("ry", 4)
+    .attr("fill", "#0a0a12")
+    .attr("opacity", 0.85)
+    .attr("height", 18);
+
+  const clusterLabels = labelGroups.append("text")
     .attr("text-anchor", "middle")
+    .attr("dominant-baseline", "middle")
     .attr("font-size", 10)
     .attr("fill", "#E24B4A")
-    .attr("opacity", 0.7)
+    .attr("opacity", 0.9)
     .text(cid => {
       const cl = data.clusters.find(c => c.id === cid);
       return cl ? `cluster ${cid} \u00B7 ${cl.wallet_count} wallets` : "";
@@ -362,11 +381,19 @@ function renderGraph(data) {
       .attr("y2", d => d.target.y);
     node.attr("cx", d => d.x).attr("cy", d => d.y);
     glow.attr("cx", d => d.x).attr("cy", d => d.y);
-    clusterLabels.each(function(cid) {
+    labelGroups.each(function(cid) {
       const clusterNodes = nodes.filter(n => n.cluster_id === cid);
-      const avgY = d3.max(clusterNodes, n => n.y) + 22;
       const avgX = d3.mean(clusterNodes, n => n.x);
-      d3.select(this).attr("x", avgX).attr("y", avgY);
+      const avgY = d3.max(clusterNodes, n => n.y) + 26;
+      const g = d3.select(this);
+      const textEl = g.select("text");
+      textEl.attr("x", avgX).attr("y", avgY);
+      const textLen = textEl.node().getComputedTextLength ? textEl.node().getComputedTextLength() : 80;
+      const pad = 8;
+      g.select("rect")
+        .attr("x", avgX - textLen / 2 - pad)
+        .attr("y", avgY - 9)
+        .attr("width", textLen + pad * 2);
     });
   });
 }
@@ -381,7 +408,7 @@ function showClusterPanel(clusterId) {
 
   const clusterNodes = currentData.nodes.filter(n => n.cluster_id === clusterId && !n.is_hub);
   const confidencePct = Math.round(cluster.confidence * 100);
-  const isSybil = cluster.is_sybil;
+  const isSybil = cluster.is_sybil ?? (cluster.confidence > 0.5);
   const color = isSybil ? "#E24B4A" : "#1D9E75";
 
   let html = `
@@ -393,7 +420,7 @@ function showClusterPanel(clusterId) {
       </div>
       <div class="conf-bar-wrap">
         <div class="conf-label"><span>Confidence</span><span class="conf-val">${confidencePct}%</span></div>
-        <div class="conf-bar"><div class="conf-fill" style="width:${confidencePct}%;background:${color}"></div></div>
+        <div class="conf-bar"><div class="conf-fill" style="width:${Math.min(confidencePct, 99)}%;background:${color}"></div></div>
       </div>
       <div class="evidence-list">
         ${cluster.evidence.map(e => `
@@ -409,8 +436,8 @@ function showClusterPanel(clusterId) {
       <div class="panel-title">CLUSTER STATS</div>
       <div class="cluster-stats">
         <div class="cs"><div class="cs-n" style="color:${color}">${cluster.wallet_count}</div><div class="cs-l">Wallets in cluster</div></div>
-        <div class="cs"><div class="cs-n" style="color:#EF9F27">$${(cluster.stolen_usd / 1000).toFixed(0)}K</div><div class="cs-l">Tokens flagged</div></div>
-        <div class="cs"><div class="cs-n">${(cluster.avg_similarity * 100).toFixed(0)}%</div><div class="cs-l">Avg similarity</div></div>
+        <div class="cs"><div class="cs-n" style="color:#EF9F27">${cluster.stolen_usd != null && isFinite(cluster.stolen_usd) ? '$' + (cluster.stolen_usd / 1000).toFixed(0) + 'K' : '$unknown'}</div><div class="cs-l">Tokens flagged</div></div>
+        <div class="cs"><div class="cs-n">${cluster.avg_similarity != null && isFinite(cluster.avg_similarity) ? (cluster.avg_similarity * 100).toFixed(0) + '%' : '—'}</div><div class="cs-l">Avg similarity</div></div>
         <div class="cs"><div class="cs-n">${cluster.funder.slice(0,6)}...</div><div class="cs-l">Root funder</div></div>
       </div>
     </div>
@@ -419,9 +446,9 @@ function showClusterPanel(clusterId) {
       <div class="panel-title">ADDRESSES</div>
       <div class="addr-list">
         ${clusterNodes.map(n => {
-          const tagClass = n.risk === "CONFIRMED_SYBIL" || n.risk === "LIKELY_SYBIL" ? "tag-sybil" : n.risk === "SUSPICIOUS" ? "tag-suspicious" : "tag-clean";
-          const tagText = n.risk === "CONFIRMED_SYBIL" ? "Sybil" : n.risk === "LIKELY_SYBIL" ? "Likely" : n.risk === "SUSPICIOUS" ? "Suspicious" : "Clean";
-          const dotColor = n.risk === "CONFIRMED_SYBIL" || n.risk === "LIKELY_SYBIL" ? "#E24B4A" : n.risk === "SUSPICIOUS" ? "#EF9F27" : "#1D9E75";
+          const tagClass = n.risk === "CONFIRMED_SYBIL" ? "tag-sybil" : n.risk === "LIKELY_SYBIL" ? "tag-likely" : n.risk === "SUSPICIOUS" ? "tag-suspicious" : "tag-clean";
+          const tagText = n.risk === "CONFIRMED_SYBIL" ? "Confirmed" : n.risk === "LIKELY_SYBIL" ? "Likely" : n.risk === "SUSPICIOUS" ? "Suspicious" : "Clean";
+          const dotColor = n.risk === "CONFIRMED_SYBIL" ? "#E24B4A" : n.risk === "LIKELY_SYBIL" ? "#f0c040" : n.risk === "SUSPICIOUS" ? "#EF9F27" : "#1D9E75";
           return `<div class="addr-row" onclick="showWalletDetail('${n.id}')">
             <div class="addr-dot" style="background:${dotColor}"></div>
             <div class="addr-hash">${n.id.slice(0,6)}...${n.id.slice(-4)}</div>
@@ -453,7 +480,7 @@ function showWalletDetail(walletId) {
       </div>
       <div class="conf-bar-wrap">
         <div class="conf-label"><span>Confidence</span><span class="conf-val">${confidencePct}%</span></div>
-        <div class="conf-bar"><div class="conf-fill" style="width:${confidencePct}%;background:${color}"></div></div>
+        <div class="conf-bar"><div class="conf-fill" style="width:${Math.min(confidencePct, 99)}%;background:${color}"></div></div>
       </div>
       <div class="evidence-list">
         ${node.evidence.map(e => `
@@ -486,7 +513,7 @@ function showWalletDetail(walletId) {
 function updateStats(data) {
   const totalNodes = data.nodes.filter(n => !n.is_hub).length;
   const flagged = data.nodes.filter(n => n.is_sybil && !n.is_hub).length;
-  const totalUsd = data.clusters.reduce((sum, c) => sum + c.stolen_usd, 0);
+  const totalUsd = data.clusters.reduce((sum, c) => sum + (c.stolen_usd || 0), 0);
 
   document.getElementById("stat-scanned").textContent = totalNodes;
   document.getElementById("stat-flagged").textContent = flagged;
@@ -568,10 +595,30 @@ async function runAnalysis() {
 }
 
 // ============================================================
-//  Init — auto-run with demo data
+//  Init — load analysis from URL param if present
 // ============================================================
-window.addEventListener("load", () => {
-  // Start blank — user clicks Analyze to run
+window.addEventListener("load", async () => {
+  const params = new URLSearchParams(window.location.search);
+  const name = params.get("analysis");
+  if (!name) return;
+
+  document.getElementById("graph-area").querySelector(".graph-label").textContent = `WALLET GRAPH · ${name.toUpperCase()}`;
+  document.getElementById("panel").innerHTML = '<div class="panel-empty">Loading analysis...</div>';
+
+  try {
+    const resp = await fetch(`/analysis/${encodeURIComponent(name)}`);
+    if (!resp.ok) throw new Error(`Analysis '${name}' not found`);
+    const data = await resp.json();
+    currentData = data;
+    renderGraph(data);
+    updateStats(data);
+    if (data.clusters && data.clusters.length > 0) {
+      showClusterPanel(data.clusters[0].id);
+    }
+    document.getElementById("graph-area").querySelector(".graph-label").textContent = `WALLET GRAPH · ${name.toUpperCase()}`;
+  } catch (err) {
+    document.getElementById("panel").innerHTML = `<div class="panel-empty" style="color:#E24B4A">Error: ${err.message}</div>`;
+  }
 });
 
 window.addEventListener("resize", () => {

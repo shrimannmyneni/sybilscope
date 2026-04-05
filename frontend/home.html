@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SybilScope</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0f; color: #f0efe8; min-height: 100vh; display: flex; flex-direction: column; }
+
+.topbar { display: flex; align-items: center; gap: 16px; padding: 18px 48px; border-bottom: 0.5px solid #1a1a22; }
+.logo { font-size: 17px; font-weight: 600; letter-spacing: 1px; }
+.logo span { color: #E24B4A; }
+.subtitle { font-size: 11px; color: #333; letter-spacing: 2px; text-transform: uppercase; }
+
+/* Hero */
+.hero { padding: 80px 48px 56px; border-bottom: 0.5px solid #1a1a22; }
+.hero-eyebrow { font-size: 10px; color: #E24B4A; letter-spacing: 2.5px; text-transform: uppercase; font-family: monospace; margin-bottom: 20px; }
+.hero-title { font-size: 52px; font-weight: 300; line-height: 1.15; color: #f0efe8; margin-bottom: 20px; letter-spacing: -0.5px; max-width: 720px; }
+.hero-title em { color: #E24B4A; font-style: normal; }
+.hero-sub { font-size: 15px; color: #cccccc; line-height: 1.75; max-width: 600px; }
+
+/* Info sections */
+.info-strip { border-bottom: 0.5px solid #1a1a22; }
+.info-row { display: grid; grid-template-columns: 280px 1fr; border-bottom: 0.5px solid #1a1a22; }
+.info-row:last-child { border-bottom: none; }
+.info-left { padding: 48px 48px; border-right: 0.5px solid #1a1a22; }
+.info-label { font-size: 10px; color: #E24B4A; letter-spacing: 2px; text-transform: uppercase; font-family: monospace; margin-bottom: 14px; }
+.info-heading { font-size: 20px; font-weight: 400; color: #f0efe8; line-height: 1.35; }
+.info-right { padding: 48px 56px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px 48px; align-content: start; }
+.info-point { }
+.info-point-title { font-size: 12px; font-weight: 500; color: #e0e0e0; margin-bottom: 6px; letter-spacing: 0.3px; }
+.info-point-body { font-size: 13px; color: #b0b0b0; line-height: 1.7; }
+.info-point-body em { color: #d0d0d0; font-style: normal; }
+
+/* Analyses */
+.section { padding: 48px 48px 64px; }
+.section-title { font-size: 10px; color: #333; letter-spacing: 2.5px; margin-bottom: 24px; text-transform: uppercase; }
+
+.analyses-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.analysis-card {
+  background: #0d0d14;
+  border: 0.5px solid #1e1e28;
+  border-radius: 12px;
+  padding: 24px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s, box-shadow 0.2s;
+  text-decoration: none;
+  display: block;
+}
+.analysis-card:hover {
+  border-color: #E24B4A;
+  background: #120a0a;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(226, 75, 74, 0.08);
+}
+
+.card-name { font-size: 10px; color: #888888; margin-bottom: 8px; font-family: monospace; letter-spacing: 0.5px; }
+.card-title { font-size: 15px; font-weight: 500; color: #f0efe8; margin-bottom: 10px; line-height: 1.4; }
+.card-desc { font-size: 12px; color: #bbbbbb; line-height: 1.6; margin-bottom: 20px; }
+.card-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.cs-n { font-size: 24px; font-weight: 400; }
+.cs-n.red { color: #E24B4A; }
+.cs-n.amber { color: #EF9F27; }
+.cs-l { font-size: 10px; color: #444; margin-top: 3px; letter-spacing: 0.5px; text-transform: uppercase; }
+.card-funder { margin-top: 18px; padding-top: 14px; border-top: 0.5px solid #1a1a22; font-size: 10px; color: #999999; font-family: monospace; }
+.card-funder span { color: #999999; }
+
+.empty { color: #2a2a2a; font-size: 14px; padding: 48px 0; }
+.loading { color: #333; font-size: 13px; padding: 48px 0; }
+.dot { display: inline-block; animation: blink 1s infinite; }
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="logo" href="http://0.0.0.0:8000/" style="text-decoration:none;color:inherit"><span>Sybil</span>Scope</a>
+  <div class="subtitle">ON-CHAIN SYBIL DETECTOR</div>
+</div>
+
+<div class="hero">
+  <div class="hero-eyebrow">// SYBILSCOPE</div>
+  <div class="hero-title">Detect <em>Sybil attacks</em><br>before the snapshot.</div>
+  <div class="hero-sub">Every major airdrop is targeted by bot farms controlling thousands of fake wallets. SybilScope traverses the on-chain funding graph using JAC Walkers and GPT-4o reasoning to expose coordinated clusters — before they drain your token distribution.</div>
+</div>
+
+<div class="info-strip">
+
+  <div class="info-row">
+    <div class="info-left">
+      <div class="info-label">// THE PROBLEM</div>
+      <div class="info-heading">Fake wallets are stealing your airdrop.</div>
+    </div>
+    <div class="info-right">
+      <div class="info-point">
+        <div class="info-point-title">The scale of the attack</div>
+        <div class="info-point-body">Arbitrum's 2023 airdrop lost <em>253M ARB</em> — 21.8% of the total supply — to confirmed Sybil clusters. HOP Protocol ran a community bounty and found farms of 25–516 wallets each, all controlled by one operator. This isn't an edge case; it's the default outcome for any unprotected distribution.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">How attackers operate</div>
+        <div class="info-point-body">A single operator funds hundreds of wallets from one master address, runs identical qualifying interactions across all of them, then dumps the tokens immediately after claim. Sophisticated farms add intermediary hops, randomize timing slightly, and spread across chains — enough to fool simple rule-based detectors.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Why existing tools fail</div>
+        <div class="info-point-body">Rule-based systems match known patterns. The moment an attacker learns the rules, they route around them. Arbitrum's own open-source tool uses Louvain clustering alone — strong for obvious farms, blind to anything that obscures its funding trail or mimics organic behavior on the surface.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Who gets hurt</div>
+        <div class="info-point-body">Real users receive a smaller share of every airdrop because bots dilute the pool. Project teams watch their token price crater when farms dump immediately after distribution. The community loses trust. Sybil attacks are a tax on every legitimate participant in the ecosystem.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-row">
+    <div class="info-left">
+      <div class="info-label">// HOW IT WORKS</div>
+      <div class="info-heading">Graph traversal meets LLM reasoning.</div>
+    </div>
+    <div class="info-right">
+      <div class="info-point">
+        <div class="info-point-title">JAC Walker graph traversal</div>
+        <div class="info-point-body">Every wallet is a node. Every on-chain transfer is a directed edge. A JAC Walker — a graph-native agent that moves through connected nodes — traverses the funding graph from root funders outward, collecting behavioral features at each wallet without re-visiting nodes.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Five structural detection signals</div>
+        <div class="info-point-body">Shared funder (same master wallet funds multiple addresses), linear chain detection (A→B→C→D sequential funding), identical transfer amounts (bot-precision gas and token values), Louvain community clustering (wallets that transact together), and behavior similarity via Jaccard score across protocol interactions.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">GPT-4o cluster reasoning</div>
+        <div class="info-point-body">All five signals feed into a single GPT-4o call per cluster. The model doesn't just match patterns — it reasons about intent. "Is there any innocent explanation for 7 wallets sharing an exact funder, making 2 identical transactions each, within 4 seconds of each other?" The answer comes back structured and cited.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Agentic re-investigation loop</div>
+        <div class="info-point-body">Verdicts below 70% confidence trigger a second pass: the funding tree is traced 3 hops deeper, new signals are computed, and the LLM re-classifies with the additional context. This loop runs up to 3 rounds, catching evasion patterns that a single-pass classifier would miss.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-row">
+    <div class="info-left">
+      <div class="info-label">// WHAT YOU GET</div>
+      <div class="info-heading">Explainable verdicts, ready to act on.</div>
+    </div>
+    <div class="info-right">
+      <div class="info-point">
+        <div class="info-point-title">Force-directed cluster graph</div>
+        <div class="info-point-body">Sybil clusters render as hub-spoke structures in red — master wallet at center, funded wallets radiating outward. Clean wallets appear in green. The graph is interactive: click any node to inspect its verdict, evidence list, and confidence score in a side panel.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Per-wallet AI verdict</div>
+        <div class="info-point-body">Every wallet receives a risk classification — CLEAN, SUSPICIOUS, LIKELY_SYBIL, or CONFIRMED_SYBIL — with a confidence score and a list of specific evidence items. The LLM explains its reasoning in plain English, giving project teams something to audit and communicate to their community.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Flagged address export</div>
+        <div class="info-point-body">Each analysis produces a structured JSON output with every flagged address, its cluster assignment, risk level, and evidence. Drop it directly into your airdrop eligibility filter. The output is designed for automated pipeline integration — no manual review required for high-confidence verdicts.</div>
+      </div>
+      <div class="info-point">
+        <div class="info-point-title">Validated on real data</div>
+        <div class="info-point-body">Tested against 82 confirmed Sybil addresses from HOP Protocol's community bounty program — addresses independently verified and removed from the HOP airdrop by the protocol team. SybilScope flagged 13/13 wallets in the demo dataset with zero false negatives on labeled ground truth.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="section">
+  <div class="section-title">SAVED ANALYSES</div>
+  <div class="analyses-grid" id="grid">
+    <div class="loading">Loading<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div>
+  </div>
+</div>
+
+<script>
+async function load() {
+  const grid = document.getElementById("grid");
+  try {
+    const resp = await fetch("/analyses");
+    const analyses = await resp.json();
+
+    if (!analyses.length) {
+      grid.innerHTML = '<div class="empty">No analyses found. Run <code>jac run main.jac</code> to generate one.</div>';
+      return;
+    }
+
+    grid.innerHTML = analyses.map(a => `
+      <a class="analysis-card" href="/graph?analysis=${encodeURIComponent(a.name)}">
+        <div class="card-name">${a.name}</div>
+        ${a.title ? `<div class="card-title">${a.title}</div>` : ""}
+        ${a.description ? `<div class="card-desc">${a.description}</div>` : ""}
+        <div class="card-stats">
+          <div class="cs">
+            <div class="cs-n">${a.total_classified}</div>
+            <div class="cs-l">SCANNED</div>
+          </div>
+          <div class="cs">
+            <div class="cs-n red">${a.flagged}</div>
+            <div class="cs-l">FLAGGED</div>
+          </div>
+          <div class="cs">
+            <div class="cs-n amber">${a.clusters_found}</div>
+            <div class="cs-l">CLUSTERS</div>
+          </div>
+        </div>
+        ${a.common_funder ? `<div class="card-funder">Root funder <span>${a.common_funder.slice(0,14)}...</span></div>` : ""}
+      </a>
+    `).join("");
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">Could not load analyses: ${e.message}</div>`;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

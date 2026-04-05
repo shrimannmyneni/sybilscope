@@ -14,7 +14,10 @@ ETHERSCAN_KEY = os.getenv("ETHERSCAN_API_KEY", "")
 BASE_URL = "https://api.etherscan.io/v2/api"
 CHAIN_ID = 42161
 
-CACHE_PATH = os.path.join(os.path.dirname(__file__), "..", "demo_data_cache.json")
+CACHE_PATH = os.environ.get(
+    "SYBILSCOPE_CACHE",
+    os.path.join(os.path.dirname(__file__), "..", "demo_data_cache.json")
+)
 _cache: dict | None = None
 
 
@@ -1104,3 +1107,209 @@ Respond with a JSON object containing a "wallets" array with exactly {cluster_si
             }
             for _ in wallet_features
         ]
+
+
+def generate_analysis_narrative(
+    total_classified: int,
+    sybil_count: int,
+    clusters: list,
+    common_funder: str,
+) -> dict:
+    """Generate a short title and plain-English description of the analysis via LLM."""
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    cluster_lines = []
+    for i, c in enumerate(clusters[:5], 1):
+        signals = ", ".join(c.get("signals", []))
+        cluster_lines.append(
+            f"  Cluster {i}: {c['wallet_count']} wallets, confidence {c['confidence']:.0%}, signals: {signals}"
+        )
+    clusters_text = "\n".join(cluster_lines) if cluster_lines else "  No clusters found."
+
+    prompt = f"""You are summarizing an on-chain Sybil attack analysis for a security dashboard.
+
+Analysis results:
+- Wallets scanned: {total_classified}
+- Wallets flagged as Sybil: {sybil_count}
+- Clusters found: {len(clusters)}
+{clusters_text}
+{"- Common funder: " + common_funder[:20] + "..." if common_funder else ""}
+
+Write a JSON object with exactly two fields:
+- "title": a concise title (max 8 words) describing the finding, e.g. "Coordinated Sybil ring: 3 clusters detected"
+- "description": 2-3 sentences of plain English explaining what was found, which signals triggered, and the risk level. Be direct and specific.
+
+Respond only with the JSON object."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        return {
+            "title": result.get("title", "Sybil analysis complete"),
+            "description": result.get("description", ""),
+        }
+    except Exception as e:
+        print(f"  [WARNING] Narrative generation failed: {e}")
+        flagged_pct = round(sybil_count / total_classified * 100) if total_classified else 0
+        return {
+            "title": f"{sybil_count} wallets flagged across {len(clusters)} cluster(s)",
+            "description": f"Analysis scanned {total_classified} wallets and flagged {sybil_count} ({flagged_pct}%) as potential Sybil across {len(clusters)} cluster(s).",
+        }
+
+
+def build_json_output(
+    all_verdicts: list,
+    all_wallet_data: list,
+    clusters: list,
+    sybil_count: int,
+    common_funder: str,
+    output_path: str = "../analysis_output.json",
+) -> dict:
+    """
+    Build the JSON output for the frontend from JAC analysis results.
+    Called from main.jac to avoid JAC type-system limitations on dict manipulation.
+    Writes to output_path and returns the dict.
+    """
+    addr_to_verdict = {v["address"]: v for v in all_verdicts}
+    addr_to_wd = {w["address"]: w for w in all_wallet_data}
+
+    # Build cluster metadata and address→cluster_id map
+    addr_to_cluster_id: dict[str, int] = {}
+    processed_clusters = []
+    cid = 1
+
+    for c in clusters:
+        if c.get("size", 0) < 2:
+            continue
+
+        cluster_verdicts = [addr_to_verdict[a] for a in c.get("addresses", []) if a in addr_to_verdict]
+        for a in c.get("addresses", []):
+            addr_to_cluster_id[a] = cid
+
+        conf_avg = (sum(v["confidence"] for v in cluster_verdicts) / len(cluster_verdicts)) if cluster_verdicts else 0.0
+
+        evidence_set: list[str] = []
+        for cv in cluster_verdicts:
+            for e in cv.get("evidence", []):
+                if e not in evidence_set:
+                    evidence_set.append(e)
+
+        signals: list[str] = []
+        c_funder = c.get("funder", "")
+        if c.get("chain", {}).get("is_chain"):
+            signals.append("linear chain")
+        if c.get("amount_anomaly", {}).get("is_anomaly"):
+            signals.append("amount anomaly")
+        if c_funder and not c_funder.startswith("louvain"):
+            signals.append("shared funder")
+        else:
+            signals.append("louvain community")
+
+        # is_sybil: any wallet in cluster is flagged
+        is_sybil = any(v["risk"] != "CLEAN" for v in cluster_verdicts)
+
+        # stolen_usd: flagged wallets × avg airdrop value ($26K per HOP airdrop)
+        AVG_AIRDROP_VALUE_USD = 26000
+        flagged_count = sum(1 for v in cluster_verdicts if v["risk"] != "CLEAN")
+        stolen_usd = flagged_count * AVG_AIRDROP_VALUE_USD
+
+        # avg_similarity: pairwise Jaccard across all wallets in cluster
+        cluster_wds = [addr_to_wd[a] for a in c.get("addresses", []) if a in addr_to_wd]
+        sim_scores: list[float] = []
+        for i in range(len(cluster_wds)):
+            for j in range(i + 1, len(cluster_wds)):
+                sim_scores.append(compute_behavior_similarity(cluster_wds[i], cluster_wds[j]))
+        avg_similarity = round(sum(sim_scores) / len(sim_scores), 3) if sim_scores else 0.0
+
+        processed_clusters.append({
+            "id": cid,
+            "funder": c_funder,
+            "wallet_count": len(cluster_verdicts),
+            "confidence": round(conf_avg, 3),
+            "signals": signals,
+            "evidence": evidence_set[:6],
+            "is_sybil": is_sybil,
+            "stolen_usd": stolen_usd,
+            "avg_similarity": avg_similarity,
+        })
+        cid += 1
+
+    # Build nodes
+    json_nodes: list[dict] = []
+    hub_added: set[str] = set()
+
+    for v in all_verdicts:
+        cluster_id = addr_to_cluster_id.get(v["address"], 0)
+        wd = addr_to_wd.get(v["address"], {})
+        funder = wd.get("first_funder", "")
+        tx_count = wd.get("tx_count", 0)
+
+        hub_id = funder if funder else f"unknown-{cluster_id}"
+        if cluster_id > 0 and hub_id not in hub_added:
+            json_nodes.append({
+                "id": hub_id,
+                "risk": "HUB",
+                "confidence": 1.0,
+                "cluster_id": cluster_id,
+                "tx_count": 0,
+                "is_hub": True,
+                "is_sybil": True,
+                "funder": "",
+                "evidence": [f"Root funder for cluster {cluster_id}"],
+                "reasoning": "Master wallet identified as cluster funder.",
+            })
+            hub_added.add(hub_id)
+
+        json_nodes.append({
+            "id": v["address"],
+            "risk": v["risk"],
+            "confidence": v["confidence"],
+            "cluster_id": cluster_id,
+            "tx_count": tx_count,
+            "is_hub": False,
+            "is_sybil": v["risk"] != "CLEAN",
+            "funder": funder,
+            "evidence": v.get("evidence", []),
+            "reasoning": v.get("reasoning", ""),
+        })
+
+    # Build edges
+    hub_ids = {n["id"] for n in json_nodes if n["is_hub"]}
+    json_edges = [
+        {"source": n["funder"], "target": n["id"]}
+        for n in json_nodes
+        if not n["is_hub"] and n["funder"] in hub_ids
+    ]
+
+    print("  Generating analysis narrative...")
+    narrative = generate_analysis_narrative(
+        len(all_verdicts), sybil_count, processed_clusters, common_funder
+    )
+
+    result = {
+        "nodes": json_nodes,
+        "edges": json_edges,
+        "clusters": processed_clusters,
+        "summary": {
+            "total_classified": len(all_verdicts),
+            "flagged": sybil_count,
+            "clusters_found": len(processed_clusters),
+            "common_funder": common_funder or "",
+            "title": narrative["title"],
+            "description": narrative["description"],
+        },
+    }
+
+    resolved = os.path.join(os.path.dirname(__file__), output_path)
+    with open(resolved, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"\nJSON output written to {resolved}")
+
+    return result
+

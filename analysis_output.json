@@ -1,0 +1,348 @@
+{
+  "nodes": [
+    {
+      "id": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "risk": "HUB",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 0,
+      "is_hub": true,
+      "is_sybil": true,
+      "funder": "",
+      "evidence": [
+        "Root funder for cluster 1"
+      ],
+      "reasoning": "Master wallet identified as cluster funder."
+    },
+    {
+      "id": "0x001d022975a75cefcac6857d99543811f068d9a9",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 2,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "identical behavior with Wallet #3"
+      ],
+      "reasoning": "This wallet shares a funder with multiple other wallets and exhibits identical behavior with Wallet #3, indicating a strong likelihood of being part of a Sybil attack."
+    },
+    {
+      "id": "0x00435cf222fba348a90e39e0b56d262edb8ec50d",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 46,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "high transaction count but low timing diversity"
+      ],
+      "reasoning": "Despite having a high transaction count, this wallet shares a funder with all other wallets in the cluster, which is a strong indicator of a Sybil attack."
+    },
+    {
+      "id": "0x0050beff948011d00d60404d65c4deb40084fd25",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 2,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "identical behavior with Wallet #1"
+      ],
+      "reasoning": "This wallet shares a funder with multiple wallets and has identical behavior with Wallet #1, confirming its involvement in a Sybil attack."
+    },
+    {
+      "id": "0x0078049f1766f5ea41ff17d8e88499bcca46fd68",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 45,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "high transaction count but low timing diversity"
+      ],
+      "reasoning": "This wallet shares a funder with all other wallets in the cluster, indicating a strong likelihood of being part of a Sybil attack despite a high transaction count."
+    },
+    {
+      "id": "0x00b7ddb0fa90ecd73ac4d4744b8f5da95f94c734",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 57,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "low behavior similarity with others"
+      ],
+      "reasoning": "This wallet shares a funder with multiple wallets, which is a strong indicator of a Sybil attack, despite having a diverse interaction pattern."
+    },
+    {
+      "id": "0x0140ba84fae7e93e30ce8e34866a3bc71d21367e",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 26,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "low behavior similarity with others"
+      ],
+      "reasoning": "This wallet shares a funder with multiple wallets, indicating a strong likelihood of being part of a Sybil attack, despite some diversity in behavior."
+    },
+    {
+      "id": "0x0149884c791c379b42a0b073fd4c59c863143a9e",
+      "risk": "CONFIRMED_SYBIL",
+      "confidence": 1.0,
+      "cluster_id": 1,
+      "tx_count": 10,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "low behavior similarity with others"
+      ],
+      "reasoning": "This wallet shares a funder with multiple wallets, which is a strong indicator of a Sybil attack, despite having a diverse interaction pattern."
+    },
+    {
+      "id": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "risk": "HUB",
+      "confidence": 1.0,
+      "cluster_id": 2,
+      "tx_count": 0,
+      "is_hub": true,
+      "is_sybil": true,
+      "funder": "",
+      "evidence": [
+        "Root funder for cluster 2"
+      ],
+      "reasoning": "Master wallet identified as cluster funder."
+    },
+    {
+      "id": "0x000240e384b0d758236f041d64648a6bf55bb7f1",
+      "risk": "SUSPICIOUS",
+      "confidence": 0.8,
+      "cluster_id": 2,
+      "tx_count": 16,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "evidence": [
+        "Shared funder with 3 other wallets"
+      ],
+      "reasoning": "This wallet shares a funder with multiple other wallets, which is a strong indicator of potential Sybil activity."
+    },
+    {
+      "id": "0x00035ab46994cda43f150b2be16bb7ca423171c7",
+      "risk": "SUSPICIOUS",
+      "confidence": 0.8,
+      "cluster_id": 2,
+      "tx_count": 80,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "evidence": [
+        "Shared funder with 3 other wallets"
+      ],
+      "reasoning": "This wallet shares a funder with multiple other wallets, which is a strong indicator of potential Sybil activity."
+    },
+    {
+      "id": "0x00f1ee4a1302264ba25d7c94afa36e62c5c168c5",
+      "risk": "SUSPICIOUS",
+      "confidence": 0.8,
+      "cluster_id": 2,
+      "tx_count": 228,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "evidence": [
+        "Shared funder with 3 other wallets"
+      ],
+      "reasoning": "This wallet shares a funder with multiple other wallets, which is a strong indicator of potential Sybil activity."
+    },
+    {
+      "id": "0x016677f3a6208c9b136040dc57f7ebc9bc9af7bc",
+      "risk": "SUSPICIOUS",
+      "confidence": 0.8,
+      "cluster_id": 2,
+      "tx_count": 59,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "evidence": [
+        "Shared funder with 3 other wallets"
+      ],
+      "reasoning": "This wallet shares a funder with multiple other wallets, which is a strong indicator of potential Sybil activity."
+    },
+    {
+      "id": "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "risk": "HUB",
+      "confidence": 1.0,
+      "cluster_id": 3,
+      "tx_count": 0,
+      "is_hub": true,
+      "is_sybil": true,
+      "funder": "",
+      "evidence": [
+        "Root funder for cluster 3"
+      ],
+      "reasoning": "Master wallet identified as cluster funder."
+    },
+    {
+      "id": "0x00357a0042d859f1204b7f24ef52791c1e24c9a5",
+      "risk": "SUSPICIOUS",
+      "confidence": 0.85,
+      "cluster_id": 3,
+      "tx_count": 5,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "evidence": [
+        "Shared funder with another wallet in the cluster"
+      ],
+      "reasoning": "The wallet shares a funder with another wallet, which is a strong indicator of potential Sybil activity."
+    },
+    {
+      "id": "0x00aa6ebb3544a4f76f0b3cd1007f7a87c9afbe0d",
+      "risk": "SUSPICIOUS",
+      "confidence": 0.85,
+      "cluster_id": 3,
+      "tx_count": 35,
+      "is_hub": false,
+      "is_sybil": true,
+      "funder": "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "evidence": [
+        "Shared funder with another wallet in the cluster"
+      ],
+      "reasoning": "The wallet shares a funder with another wallet, which is a strong indicator of potential Sybil activity."
+    }
+  ],
+  "edges": [
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x001d022975a75cefcac6857d99543811f068d9a9"
+    },
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x00435cf222fba348a90e39e0b56d262edb8ec50d"
+    },
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x0050beff948011d00d60404d65c4deb40084fd25"
+    },
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x0078049f1766f5ea41ff17d8e88499bcca46fd68"
+    },
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x00b7ddb0fa90ecd73ac4d4744b8f5da95f94c734"
+    },
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x0140ba84fae7e93e30ce8e34866a3bc71d21367e"
+    },
+    {
+      "source": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "target": "0x0149884c791c379b42a0b073fd4c59c863143a9e"
+    },
+    {
+      "source": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "target": "0x000240e384b0d758236f041d64648a6bf55bb7f1"
+    },
+    {
+      "source": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "target": "0x00035ab46994cda43f150b2be16bb7ca423171c7"
+    },
+    {
+      "source": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "target": "0x00f1ee4a1302264ba25d7c94afa36e62c5c168c5"
+    },
+    {
+      "source": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "target": "0x016677f3a6208c9b136040dc57f7ebc9bc9af7bc"
+    },
+    {
+      "source": "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "target": "0x00357a0042d859f1204b7f24ef52791c1e24c9a5"
+    },
+    {
+      "source": "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "target": "0x00aa6ebb3544a4f76f0b3cd1007f7a87c9afbe0d"
+    }
+  ],
+  "clusters": [
+    {
+      "id": 1,
+      "funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+      "wallet_count": 7,
+      "confidence": 1.0,
+      "signals": [
+        "shared funder"
+      ],
+      "evidence": [
+        "shared funder with 6 other wallets",
+        "identical behavior with Wallet #3",
+        "high transaction count but low timing diversity",
+        "identical behavior with Wallet #1",
+        "low behavior similarity with others"
+      ],
+      "is_sybil": true,
+      "stolen_usd": 182000,
+      "avg_similarity": 0.181
+    },
+    {
+      "id": 2,
+      "funder": "0x80c67432656d59144ceff962e8faf8926599bcf8",
+      "wallet_count": 4,
+      "confidence": 0.8,
+      "signals": [
+        "shared funder"
+      ],
+      "evidence": [
+        "Shared funder with 3 other wallets"
+      ],
+      "is_sybil": true,
+      "stolen_usd": 104000,
+      "avg_similarity": 0.121
+    },
+    {
+      "id": 3,
+      "funder": "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "wallet_count": 2,
+      "confidence": 0.85,
+      "signals": [
+        "shared funder"
+      ],
+      "evidence": [
+        "Shared funder with another wallet in the cluster"
+      ],
+      "is_sybil": true,
+      "stolen_usd": 52000,
+      "avg_similarity": 0.222
+    }
+  ],
+  "summary": {
+    "total_classified": 13,
+    "flagged": 13,
+    "clusters_found": 3,
+    "common_funder": "0x33ceb27b39d2bb7d2e61f7564d3df29344020417",
+    "title": "Sybil Attack Detected: 3 Clusters Identified",
+    "description": "An analysis of 13 wallets revealed all were flagged as Sybil, forming 3 distinct clusters. The primary signal for these clusters was a shared funder, indicating a coordinated effort to manipulate the network, posing a significant risk."
+  }
+}
