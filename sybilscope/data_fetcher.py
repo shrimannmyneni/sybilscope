@@ -118,6 +118,90 @@ def fetch_wallet_data(address: str) -> dict:
     }
 
 
+def _shannon_entropy(counts: list[int]) -> float:
+    """Base-2 entropy of a count distribution. Returns 0 for empty/single-bucket."""
+    import math
+    total = sum(counts)
+    if total == 0:
+        return 0.0
+    h = 0.0
+    for c in counts:
+        if c > 0:
+            p = c / total
+            h -= p * math.log2(p)
+    return round(h, 3)
+
+
+def compute_entropy_features(tx_list: list, protocols: list[str]) -> dict:
+    """Temporal/behavioral entropy features a GBDT with mean+std can't see.
+    - hour_entropy:  entropy of tx-hour-of-day distribution. Low = bot scheduled
+      to narrow window. Max ~4.58 (log2 24) for uniform coverage.
+    - dow_entropy: entropy of tx-day-of-week distribution. Max ~2.81 (log2 7).
+    - burst_score: coefficient of variation of inter-tx gaps (std/mean). Bots
+      have low CV (near-uniform periodic); real users have high CV (bursty).
+    - ngram_entropy: entropy of protocol-interaction bigram distribution. Low
+      = repeating same protocol sequence template (bot script).
+    """
+    # Timestamps (unix seconds)
+    timestamps: list[int] = []
+    for tx in tx_list:
+        ts_raw = tx.get("timeStamp") if isinstance(tx, dict) else None
+        if ts_raw:
+            try:
+                timestamps.append(int(ts_raw))
+            except (TypeError, ValueError):
+                pass
+
+    if len(timestamps) < 2:
+        return {
+            "hour_entropy": 0.0,
+            "dow_entropy": 0.0,
+            "burst_score": 0.0,
+            "ngram_entropy": 0.0,
+        }
+
+    # Hour-of-day histogram
+    hour_hist: dict[int, int] = {}
+    for ts in timestamps:
+        h = (ts // 3600) % 24
+        hour_hist[h] = hour_hist.get(h, 0) + 1
+    hour_entropy = _shannon_entropy(list(hour_hist.values()))
+
+    # Day-of-week histogram (epoch Jan 1 1970 = Thursday → offset +4)
+    dow_hist: dict[int, int] = {}
+    for ts in timestamps:
+        d = ((ts // 86400) + 4) % 7
+        dow_hist[d] = dow_hist.get(d, 0) + 1
+    dow_entropy = _shannon_entropy(list(dow_hist.values()))
+
+    # Burst score = std/mean of inter-tx gaps
+    ts_sorted = sorted(timestamps)
+    gaps = [float(ts_sorted[i] - ts_sorted[i - 1]) for i in range(1, len(ts_sorted))]
+    if gaps:
+        mean_gap = sum(gaps) / len(gaps)
+        if mean_gap > 0:
+            var = sum((g - mean_gap) ** 2 for g in gaps) / len(gaps)
+            burst_score = round((var ** 0.5) / mean_gap, 3)
+        else:
+            burst_score = 0.0
+    else:
+        burst_score = 0.0
+
+    # Protocol-bigram entropy
+    bigrams: dict[str, int] = {}
+    for i in range(len(protocols) - 1):
+        key = f"{protocols[i]}->{protocols[i + 1]}"
+        bigrams[key] = bigrams.get(key, 0) + 1
+    ngram_entropy = _shannon_entropy(list(bigrams.values()))
+
+    return {
+        "hour_entropy": hour_entropy,
+        "dow_entropy": dow_entropy,
+        "burst_score": burst_score,
+        "ngram_entropy": ngram_entropy,
+    }
+
+
 def compute_timing_stats(intervals: list[float]) -> dict:
     """Compute timing statistics from operation intervals."""
     if not intervals:
@@ -640,6 +724,108 @@ def estimate_funder_fan_out(funder_address: str) -> int:
                 count += 1
                 break
     return count
+
+
+def find_sibling_clusters(
+    target_funder: str,
+    target_addresses: list[str],
+    all_clusters: list[dict],
+    current_idx: int,
+) -> dict:
+    """Find other clusters sharing the same funder or address overlap with target.
+
+    Uses only already-computed clusters — no new API calls.
+    """
+    target_set = {a.lower() for a in target_addresses}
+    tf = (target_funder or "").lower()
+    siblings = []
+    for i, c in enumerate(all_clusters):
+        if i == current_idx:
+            continue
+        c_funder = (c.get("funder") or "").lower()
+        c_addrs = {a.lower() for a in c.get("addresses", [])}
+        overlap = len(c_addrs & target_set)
+        shares_funder = bool(tf) and c_funder == tf and not tf.startswith("louvain")
+        if overlap > 0 or shares_funder:
+            siblings.append({
+                "cluster_idx": i,
+                "size": c.get("size", len(c_addrs)),
+                "funder": c.get("funder", ""),
+                "overlap": overlap,
+                "shares_funder": shares_funder,
+            })
+    return {
+        "count": len(siblings),
+        "total_sibling_wallets": sum(s["size"] for s in siblings),
+        "shares_funder_count": sum(1 for s in siblings if s["shares_funder"]),
+        "siblings": siblings[:10],
+    }
+
+
+def check_temporal_cohort(wallet_data: list[dict], window_hours: int = 24) -> dict:
+    """Detect whether wallets were created within a narrow time window (bot farm signature)."""
+    from datetime import datetime
+    timestamps = []
+    for wd in wallet_data:
+        ca = wd.get("created_at", "")
+        if not ca:
+            continue
+        try:
+            timestamps.append(datetime.fromisoformat(ca.replace("Z", "+00:00")))
+        except Exception:
+            continue
+    if len(timestamps) < 2:
+        return {"cohort_detected": False, "span_hours": 0.0, "wallet_count": len(timestamps)}
+    timestamps.sort()
+    span_hours = (timestamps[-1] - timestamps[0]).total_seconds() / 3600.0
+    return {
+        "cohort_detected": span_hours < window_hours,
+        "span_hours": round(span_hours, 2),
+        "window_hours": window_hours,
+        "wallet_count": len(timestamps),
+        "earliest": timestamps[0].isoformat(),
+        "latest": timestamps[-1].isoformat(),
+    }
+
+
+def compare_legit_baseline(features: list[dict]) -> dict:
+    """Compare cluster feature distribution to legitimate wallet baseline (heuristic)."""
+    # Hardcoded baseline derived from typical legit wallet stats on Arbitrum
+    LEGIT = {
+        "tx_count_p25": 35,
+        "tx_count_median": 120,
+        "num_protocols_median": 4,
+        "timing_gap_legit_median_sec": 3600.0,
+    }
+    if not features:
+        return {"suspicion_score": 0.0, "flags": []}
+    import statistics
+    tx_counts = [f["tx_count"] for f in features]
+    protos = [f["num_protocols"] for f in features]
+    gaps = [f["avg_timing_gap_seconds"] for f in features if f["avg_timing_gap_seconds"] > 0]
+    flags = []
+    med_tx = statistics.median(tx_counts)
+    med_proto = statistics.median(protos)
+    med_gap = statistics.median(gaps) if gaps else 0.0
+    if med_tx < LEGIT["tx_count_p25"]:
+        flags.append(
+            f"tx_count median={int(med_tx)} below legit p25={LEGIT['tx_count_p25']}"
+        )
+    if med_proto < LEGIT["num_protocols_median"] / 2:
+        flags.append(
+            f"protocol diversity={int(med_proto)} is half of legit median={LEGIT['num_protocols_median']}"
+        )
+    if 0 < med_gap < 60:
+        flags.append(
+            f"timing gap median={med_gap}s is bot-like (legit ~{int(LEGIT['timing_gap_legit_median_sec'])}s)"
+        )
+    return {
+        "cluster_tx_median": med_tx,
+        "cluster_proto_median": med_proto,
+        "cluster_gap_median_sec": med_gap,
+        "flags": flags,
+        "suspicion_score": round(len(flags) / 3.0, 2),
+    }
 
 
 def post_llm_override(verdicts: list[dict], wallet_features: list[dict],
