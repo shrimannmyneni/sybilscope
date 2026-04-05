@@ -1,6 +1,7 @@
 .env
-.env
 __pycache__/
 *.pyc
 venv/
 demo_data_cache.json
+hop_holders_cache.json
+hop_analysis_results.json

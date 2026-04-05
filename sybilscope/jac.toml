@@ -10,4 +10,4 @@ entry-point = "main.jac"
 watchdog = ">=3.0.0"
 
 [plugins.byllm.model]
-default_model = "openai:gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"

@@ -67,54 +67,47 @@ VISUALIZATION — D3.js force-directed graph
 
 ```jac
 node Wallet {
-    has address: str;
-    has created_at: str;
-    has tx_count: int;
-    has first_funder: str;
-    has protocol_interactions: list[str];
+    has address: str,
+        tx_count: int = 0,
+        first_funder: str = "",
+        protocol_interactions: list[str] = [],
+        operation_intervals: list[float] = [];
 }
 
-edge Transfer {
-    has amount: float;
-    has timestamp: str;
-}
+edge Transfer { has amount: float = 0.0, timestamp: str = ""; }
+node Cluster { has funder: str = "", wallets: list[str] = []; }
 
-walker SybilHunter {
-    has visited: set = {};
-
-    can hunt with Wallet entry {
-        if here.address in self.visited { disengage; }
-        self.visited.add(here.address);
-        neighbors = fetch_transfers(here.address);
-        for n in neighbors {
-            here ++> Transfer(amount=n.amount, timestamp=n.time)
-                ++> Wallet(address=n.to);
-        }
+walker DataCollector {
+    # Traverse graph, fetch on-chain data into each Wallet node
+    can collect with Wallet entry {
+        data = fetch_wallet_data(here.address);
+        here.tx_count = data["tx_count"];
+        here.first_funder = data["first_funder"];
+        here.protocol_interactions = data["protocol_interactions"];
         visit [-->];
     }
+}
 
-    can reflect with Cluster entry {
-        verdict = classify_sybil(here);
-        if verdict.confidence < 0.7 {
-            deeper = fetch_deeper_history(here.wallets, depth=2);
-            verdict = reclassify_with_more_data(here, deeper);
-        }
-        if verdict.is_sybil {
-            new_suspects = find_connected_clusters(here);
-            visit new_suspects;
-        }
-        report verdict;
+walker SybilJudge {
+    # Collect features per-wallet for batch LLM classification
+    has features: list[dict] = [];
+    can collect_features with Wallet entry {
+        timing = compute_timing_stats(here.operation_intervals);
+        self.features.append({...});
+        visit [-->];
     }
 }
 
-# AI classification — structured output from type signature
-def classify_sybil(
-    wallets: list[Wallet],
-    timing_gap_seconds: float,
-    common_funder: bool,
-    behavior_similarity: float,
-    gas_timing_correlation: float
-) -> SybilVerdict by llm();
+# Batch AI classification — structured output directly from type signature
+def classify_cluster_jac(
+    wallets: list[WalletFeatures],
+    cluster_size: int,
+    common_funder: str,
+    chain_detected: bool,
+    amount_anomaly: bool,
+    tx_fingerprint: bool,
+    funding_tree_depth: int
+) -> list[SybilVerdict] by llm();
 ```
 
 ---
