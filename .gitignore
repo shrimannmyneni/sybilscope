@@ -1,7 +1,25 @@
+# Environment
 .env
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 venv/
+.venv/
+
+# Generated cache files (run pre_cache.py to rebuild)
 demo_data_cache.json
+demo_curated_cache.json
+demo_sybil_overlap_cache.json
 hop_holders_cache.json
 hop_analysis_results.json
+
+# Generated analysis output (produced by JAC pipeline runs)
+*_output.json
+
+# JAC runtime data
+.jac/
+
+# macOS
+.DS_Store
