@@ -1,6 +1,6 @@
 # SybilScope
 
-**On-Chain Sybil Detector** | JacHacks 2026 — Agentic AI Track
+**On-Chain Sybil Detector** | JacHacks 2026 — Agentic AI Track | Shrimann Myneni, Shawn Dong, David Chong
 
 An AI-native, explainable, real-time Sybil detector that uses JAC's Walker-based graph traversal and `by llm()` semantic reasoning to identify fake wallets in blockchain airdrops.
 
