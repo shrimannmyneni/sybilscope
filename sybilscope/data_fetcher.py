@@ -1356,6 +1356,7 @@ def build_json_output(
     sybil_count: int,
     common_funder: str,
     output_path: str = "../analysis_output.json",
+    transfer_edges: list | None = None,
 ) -> dict:
     """
     Build the JSON output for the frontend from JAC analysis results.
@@ -1463,15 +1464,39 @@ def build_json_output(
             "funder": funder,
             "evidence": v.get("evidence", []),
             "reasoning": v.get("reasoning", ""),
+            "sybil_proximity": v.get("sybil_proximity", 0.0),
+            "hour_entropy": v.get("hour_entropy", 0.0),
+            "dow_entropy": v.get("dow_entropy", 0.0),
+            "burst_score": v.get("burst_score", 0.0),
+            "ngram_entropy": v.get("ngram_entropy", 0.0),
         })
 
-    # Build edges
+    # Build edges. Two kinds:
+    #   type=funding  — hub->spoke edges from the funder tree
+    #   type=transfer — real wallet<->wallet Transfer edges (materialized by
+    #                   the JAC GraphBuilder walker), carrying tx_count/amount.
     hub_ids = {n["id"] for n in json_nodes if n["is_hub"]}
-    json_edges = [
-        {"source": n["funder"], "target": n["id"]}
+    json_edges: list[dict] = [
+        {"source": n["funder"], "target": n["id"], "type": "funding"}
         for n in json_nodes
         if not n["is_hub"] and n["funder"] in hub_ids
     ]
+
+    classified_ids = {n["id"] for n in json_nodes}
+    for te in (transfer_edges or []):
+        src = te.get("source", "")
+        tgt = te.get("target", "")
+        if src not in classified_ids or tgt not in classified_ids:
+            continue
+        json_edges.append({
+            "source": src,
+            "target": tgt,
+            "type": "transfer",
+            "tx_count": te.get("tx_count", 0),
+            "total_amount": te.get("total_amount", 0.0),
+            "first_ts": te.get("first_ts", ""),
+            "last_ts": te.get("last_ts", ""),
+        })
 
     print("  Generating analysis narrative...")
     narrative = generate_analysis_narrative(

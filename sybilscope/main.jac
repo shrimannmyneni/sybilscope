@@ -770,7 +770,12 @@ with entry {
                 "confidence": v["confidence"],
                 "evidence": v["evidence"],
                 "reasoning": v["reasoning"],
-                "ground_truth": judge.labels[idx]
+                "ground_truth": judge.labels[idx],
+                "sybil_proximity": judge.features[idx]["sybil_proximity"],
+                "hour_entropy": judge.features[idx]["hour_entropy"],
+                "dow_entropy": judge.features[idx]["dow_entropy"],
+                "burst_score": judge.features[idx]["burst_score"],
+                "ngram_entropy": judge.features[idx]["ngram_entropy"]
             });
             print(f"    {judge.features[idx]['address'][:12]}... => {v['risk']} (conf: {v['confidence']}) [actual: {judge.labels[idx]}]");
         }
@@ -950,10 +955,39 @@ with entry {
         print(f"\nCommon funder detected across cluster: {common}");
     }
 
+    # Collect all Transfer edges from the flat_root graph for frontend rendering
+    # (so the UI can show wallet<->wallet flows, not just funder->wallet spokes).
+    classified_set: set = set();
+    for v in all_verdicts {
+        classified_set.add(v["address"].lower());
+    }
+    transfer_edges_out: list[dict] = [];
+    for addr in indexer.addr_to_node {
+        src = indexer.addr_to_node[addr];
+        for nbr in [src ->:Transfer:->] {
+            src_lower = src.address.lower();
+            tgt_lower = nbr.address.lower();
+            if src_lower not in classified_set and tgt_lower not in classified_set {
+                continue;
+            }
+            for ex in [edge src ->:Transfer:-> nbr] {
+                transfer_edges_out.append({
+                    "source": src.address,
+                    "target": nbr.address,
+                    "tx_count": ex.tx_count,
+                    "total_amount": ex.total_amount,
+                    "first_ts": ex.first_ts,
+                    "last_ts": ex.last_ts
+                });
+            }
+        }
+    }
+    print(f"Transfer edges for frontend: {len(transfer_edges_out)}");
+
     # ---- Build JSON output for frontend (delegated to Python) ----
     import os;
     output_path = os.environ.get("SYBILSCOPE_OUTPUT", "../analysis_output.json");
-    build_json_output(all_verdicts, all_wallet_data, clusters, sybil_count, common if common else "", output_path);
+    build_json_output(all_verdicts, all_wallet_data, clusters, sybil_count, common if common else "", output_path, transfer_edges_out);
 
     print("\nDone!");
 }
