@@ -50,11 +50,15 @@ DATA LAYER — Etherscan / Arbiscan API
   -> Transaction history, internal transactions, token transfers
        |
 JAC WALKER GRAPH CONSTRUCTION
-  -> Wallet nodes, Transfer edges
-  -> Walker traverses relationship graph, builds clusters
+  -> GraphBuilder walker: emits Transfer edges between tracked wallets
+  -> EnrichFeatures walker: hour/dow/burst/ngram entropy per node
+  -> SybilProximity walker: k-hop label propagation from known seeds
+  -> Louvain + funding clusters merged into cluster nodes
        |
 AI ANALYSIS LAYER — by llm()
-  -> Timing gap, funding similarity, behavior fingerprint, gas correlation
+  -> Receives sub-graph directly: list[WalletFeatures] + list[TransferRecord]
+  -> LLM reasons over wallet nodes AND edges between them (cycles, fan-out,
+     shared funder, proximity, entropy fingerprints)
        |
 OUTPUT — SybilVerdict
   -> { is_sybil, confidence, evidence[], estimated_wallets, stolen_amount_usd }
@@ -71,36 +75,72 @@ node Wallet {
         tx_count: int = 0,
         first_funder: str = "",
         protocol_interactions: list[str] = [],
-        operation_intervals: list[float] = [];
+        operation_intervals: list[float] = [],
+        label: str = "unknown",
+        # Graph-native features stored directly on the node:
+        sybil_proximity: float = 0.0,   # k-hop label-propagation score
+        hour_entropy: float = 0.0,      # tx-hour-of-day entropy
+        dow_entropy: float = 0.0,       # tx-day-of-week entropy
+        burst_score: float = 0.0,       # std/mean of inter-tx gaps (bot = low)
+        ngram_entropy: float = 0.0;     # protocol-bigram entropy
 }
 
-edge Transfer { has amount: float = 0.0, timestamp: str = ""; }
-node Cluster { has funder: str = "", wallets: list[str] = []; }
+edge Transfer {
+    has amount: float = 0.0, timestamp: str = "", token: str = "ETH",
+        tx_count: int = 1, total_amount: float = 0.0,
+        first_ts: str = "", last_ts: str = "";
+}
 
-walker DataCollector {
-    # Traverse graph, fetch on-chain data into each Wallet node
-    can collect with Wallet entry {
-        data = fetch_wallet_data(here.address);
-        here.tx_count = data["tx_count"];
-        here.first_funder = data["first_funder"];
-        here.protocol_interactions = data["protocol_interactions"];
-        visit [-->];
+# Two-phase walker that materializes the on-chain graph: phase=index builds
+# addr->node map, phase=connect emits one aggregated Transfer edge per unique
+# (from,to) pair. Sybil clusters surface as dense sub-graphs.
+walker GraphBuilder {
+    has tx_by_addr: dict[str, list] = {},
+        addr_to_node: dict[str, Wallet] = {},
+        phase: str = "index",
+        edges_created: int = 0;
+    can step with Wallet entry { ... }
+}
+
+# Frontier-based BFS from each known-sybil seed. Deposits decay^hop influence
+# on every wallet reachable within max_hops along Transfer edges (both
+# directions). Result is graph-topology feature stored on each Wallet node.
+walker SybilProximity {
+    has max_hops: int = 2, decay: float = 0.5,
+        visited: set = set(), frontier: list = [], current_hop: int = 0;
+    can propagate with Wallet entry {
+        self.visited.add(here.address);
+        self.frontier = [here];
+        while self.current_hop < self.max_hops {
+            self.current_hop += 1;
+            influence: float = self.decay ** self.current_hop;
+            next_frontier: list = [];
+            for cur in self.frontier {
+                for nbr in [cur ->:Transfer:->] {
+                    if nbr.address not in self.visited {
+                        self.visited.add(nbr.address);
+                        nbr.sybil_proximity += influence;
+                        next_frontier.append(nbr);
+                    }
+                }
+                # (also follows [cur <-:Transfer:<-] for incoming edges)
+            }
+            self.frontier = next_frontier;
+        }
     }
 }
 
-walker SybilJudge {
-    # Collect features per-wallet for batch LLM classification
-    has features: list[dict] = [];
-    can collect_features with Wallet entry {
-        timing = compute_timing_stats(here.operation_intervals);
-        self.features.append({...});
-        visit [-->];
-    }
+# Sub-graph-native AI classification: the LLM receives wallet nodes AND the
+# Transfer edges between them, not a flat feature vector. It can reason about
+# cycles, hubs, fan-out patterns — structural evidence no GBDT can see.
+obj TransferRecord {
+    has from_addr: str, to_addr: str, tx_count: int,
+        total_amount_eth: float, first_ts: str, last_ts: str;
 }
 
-# Batch AI classification — structured output directly from type signature
 def classify_cluster_jac(
     wallets: list[WalletFeatures],
+    transfers: list[TransferRecord],   # <-- cluster-internal sub-graph
     cluster_size: int,
     common_funder: str,
     chain_detected: bool,
@@ -139,7 +179,10 @@ SybilScope detects Sybil patterns across four layers of increasing sophisticatio
 | **Structural** | Funding tree (master → mid-layer → leaf, 2-3 hops) | Not needed | **Full** | Agentic loop fetches 2-layer subgraph. Tree structure visible within round 2. |
 | **Structural** | Disperse contract (1 tx fans out to hundreds) | Not needed | **Full** | Contract interaction detected via internal tx scan. Same-source amounts confirm cluster. |
 | **Behavioral** | Timestamp fingerprint (correlated timestamps) | Marginal | **Full** | `timing_gap_seconds` computed from tx history. `by llm()` reasons about statistical impossibility. |
-| **Behavioral** | Operation cloning (identical protocol sequences) | Marginal | **Full** | `behavior_similarity` computed from protocol interaction sequence. AI flags identical ordering. |
+| **Behavioral** | Operation cloning (identical protocol sequences) | Marginal | **Full** | `behavior_similarity` + `ngram_entropy` (protocol-bigram Shannon entropy). Low entropy = repeated template. AI flags identical ordering. |
+| **Behavioral** | Bot scheduling fingerprint (txs in narrow hours/days, uniform cadence) | Required | **Full** | Four entropy features per wallet — `hour_entropy`, `dow_entropy`, `burst_score`, `ngram_entropy` — computed by `EnrichFeatures` walker. LLM cites low burst_score (uniform periodic gaps) as strong bot evidence. |
+| **Graph** | k-hop proximity to known sybil seeds | Not needed | **Full** | `SybilProximity` walker does frontier-BFS with hop-decay from every seed, depositing `decay^hop` on reachable wallets. Score travels with the node into `by llm()`. |
+| **Graph** | Sub-graph structure (cycles, dense internal connectivity, fan-out) | Required | **Full** | `by llm()` receives cluster wallets AND the Transfer edges between them. LLM cites "A→B→C→A cycle" or "12 wallets share funder but no internal trade (fresh fan-out)" as structural evidence. |
 | **Behavioral** | Gas timing correlation | Required | **Partial** | Requires computing gas price distributions across addresses. Feasible but not built in v1. |
 | **Evasion** | Statistical amount anomaly (e.g. 2,997 wallets withdraw 0.00114-0.00116 ETH) | Required | **Full** | No graph needed. `by llm()` receives amount distribution and reasons that the pattern is statistically impossible by chance. |
 | **Evasion** | Cross-chain obfuscation (Chain A→bridge→Chain B→bridge→Chain C) | Required | **Full** | Etherscan V2 + Arbiscan queried in parallel. Walker merges cross-chain edges into one graph. AI reasons across the full multi-chain picture. |
@@ -293,6 +336,27 @@ data/
 | Precision (mixed test) | 87.1% | Sybil + legitimate test |
 | LLM cost per run | <$0.01 | GPT-4o-mini |
 | Cached transactions | 105,784 | demo_data_cache.json |
+
+---
+
+## What's next for SybilScope
+
+The current pipeline uses Jac's graph primitives end-to-end — walkers for graph construction, label propagation, and feature enrichment; `by llm()` receiving real sub-graph structure (nodes + edges) instead of flat feature vectors. The remaining work pushes the Jac-native design further:
+
+**1. Cluster signals as node abilities** *(planned)*
+Today, cluster-level detections (chain pattern, amount anomaly, tx fingerprint, funding tree, common funder) are computed as Python helpers and bundled into a dict that rides along to the classifier. Move them onto the `Cluster` node itself as abilities that fire on walker entry. Each signal becomes a field on the node; the graph is self-describing. This eliminates the `cluster_signals` dict and lets a future `by llm(cluster: Cluster)` call hand the LLM a structured Cluster object.
+
+**2. Investigation actions as walkers** *(planned)*
+The agentic loop currently dispatches four Python functions — `find_sibling_clusters`, `check_temporal_cohort`, `compare_legit_baseline`, `build_funding_tree`. Rewrite each as its own walker class (`SiblingHunter`, `TemporalCohortScanner`, `BaselineComparator`, `FunderTreeExpander`). The LLM's `pick_next_action` spawns the chosen walker on the live graph; walker state carries the evidence back. This turns "agentic function dispatch" into "agentic graph traversal" — the investigation actually moves through the graph, not through Python callables.
+
+**3. Counterparty overlap via walker intersection** *(planned)*
+Spawn a `CounterpartyRecorder` walker from each cluster wallet to record its external counterparties. When walkers from different wallets land on the same counterparty, that's an overlap signal — far stronger than protocol-based Jaccard, because coordinated sybils often share infrastructure addresses (CEX hot wallets, bridges, relayers) even when they avoid direct wallet-to-wallet transfers.
+
+**4. Richer edge semantics** *(under consideration)*
+Currently Transfer edges aggregate per unique `(from, to)` pair. Adding `Funding` edges (first-funder relationships) as a separate typed edge would let walkers traverse the money-origin graph independently from the activity graph. `FunderTreeExpander` would finally have a real graph to walk on instead of wrapping a Python recursion.
+
+**5. Holdout-based SybilProximity evaluation** *(needed for production)*
+Label propagation currently uses all known sybil seeds. For honest evaluation we need to split seeds vs held-out sybils, verify that proximity scores actually predict the held-out set. This also generalizes to production use: in deployment, seeds come from prior verified detections, not ground-truth labels.
 
 ---
 
