@@ -1,4 +1,4 @@
-# SybilScope
+# SybilScope || HACKATHON WINNER (1st in FINTECH TRACK)
 
 **On-Chain Sybil Detector** | JacHacks 2026 — Agentic AI Track | Shrimann Myneni, Shawn Dong, David Chong
 
